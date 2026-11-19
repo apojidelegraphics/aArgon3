@@ -1,0 +1,67 @@
+{
+  "name": "aargon3",
+  "productName": "aARgon3",
+  "version": "2.0.0",
+  "description": "aARgon3: the Apoji systems store for Nexus '28 (GitHub Pages) and the staff terminal for Mac and Windows.",
+  "author": "Apoji Delegraphics",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "site": "npx --yes serve@14 -l 8028 .",
+    "catalog": "node scripts/catalog.js",
+    "test": "node --test test/*.test.js test/*.test.mjs",
+    "dist": "electron-builder --mac dmg zip --arm64 --x64 --publish never",
+    "dist:win": "electron-builder --win nsis --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "45.3.1",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "com.apojidelegraphics.aargon3",
+    "productName": "aARgon3",
+    "copyright": "© 2026 Apoji Delegraphics. All rights reserved.",
+    "artifactName": "aARgon3-${version}-${arch}.${ext}",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": [
+      "electron/**",
+      "terminal/**",
+      "assets/**",
+      "icons/**",
+      "build/icon.png",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.business",
+      "icon": "build/icon.png",
+      "identity": null,
+      "target": ["dmg", "zip"]
+    },
+    "dmg": {
+      "title": "aARgon3 ${version}",
+      "iconSize": 112,
+      "window": { "width": 600, "height": 400 },
+      "contents": [
+        { "x": 170, "y": 200, "type": "file" },
+        { "x": 430, "y": 200, "type": "link", "path": "/Applications" }
+      ]
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "artifactName": "aARgon3-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "aARgon3",
+      "runAfterFinish": true
+    },
+    "publish": [{ "provider": "github", "owner": "apojidelegraphics", "repo": "aArgon3" }]
+  }
+}

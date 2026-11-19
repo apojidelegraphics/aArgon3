@@ -1,0 +1,73 @@
+# Pushing a tag like v2.0.0 builds the aARgon3 desktop app for Mac (Apple silicon + Intel) and Windows (x64), and
+# publishes one GitHub Release with the DMGs, zips and the Windows installer. The app checks this release for updates.
+# (The website needs no build: GitHub Pages serves the repo as it is.)
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  mac:
+    runs-on: macos-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # no Apple Developer ID; see the install steps in the release notes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      - name: Build
+        run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never
+      - name: Release notes
+        run: |
+          cat > release-notes.md <<'NOTES'
+          ## aARgon3 Terminal for Mac
+          The Apoji staff terminal: clock in and out, sell aARgon3 plans with a Stripe payment link or QR code, look up orders, timesheets.
+          Staff only: sign in with your Nexus admin account.
+
+          ## Install
+          1. Download **aARgon3-…-arm64.dmg** (Apple silicon, M1 or newer) or **…-x64.dmg** (Intel).
+          2. Open it and drag **aARgon3** to Applications.
+          3. Run once in Terminal (the app isn't notarized by Apple):
+          ```
+          xattr -cr "/Applications/aARgon3.app"
+          codesign --force --deep --sign - "/Applications/aARgon3.app"
+          ```
+          4. Open it and sign in.
+
+          ## aARgon3 Terminal for Windows
+          1. Download **aARgon3-Setup-….exe**.
+          2. Run it. If Windows shows **"Windows protected your PC"** (the app isn't code-signed), click **More info → Run anyway**.
+          3. Open aARgon3 from the Start menu and sign in.
+
+          Updating: the app tells you when a new version is out. Download it and replace the app (Mac: run the two commands again).
+          NOTES
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: aARgon3 ${{ github.ref_name }}
+          files: |
+            dist/*.dmg
+            dist/*.zip
+          body_path: release-notes.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+  windows:
+    runs-on: windows-latest
+    needs: mac
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - name: Build
+        run: npx electron-builder --win nsis --x64 --publish never
+      - name: Add to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#040b14">
+<meta name="robots" content="noindex">
+<title>Your order · aARgon3</title>
+<link rel="icon" type="image/png" href="icons/favicon.png">
+<link rel="stylesheet" href="assets/site.css">
+<link rel="stylesheet" href="assets/store.css">
+<script src="assets/config.js"></script>
+</head>
+<body>
+<div class="bgglow"></div>
+<nav><a class="brand" href="./"><img src="icons/icon-192.png" alt="">AARGON3</a><div class="links"><a href="./#faq">Help</a></div></nav>
+<main class="page done" id="main">
+  <div class="kicker">Finishing up</div>
+  <h1><span class="spin"></span> Confirming your payment…</h1>
+  <p>This usually takes a few seconds. Don't close this page.</p>
+</main>
+<footer><span>aARgon3 by Apoji Delegraphics</span><span class="sp"></span><a href="./">Store</a><a href="terms/">Terms of Sale</a></footer>
+<script>
+(function () {
+  const CFG = window.A3_CONFIG, main = document.getElementById('main');
+  const q = new URLSearchParams(location.search), sid = q.get('session_id');
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const mail = 'apojidelegraphics101010@gmail.com';
+
+  if (q.has('cancelled')) {   // a staff sale the customer backed out of
+    main.innerHTML = `<div class="kicker">Not paid</div><h1>Payment cancelled</h1><p>Nothing was charged. You can close this page or <a href="./">go to the store</a>.</p>`;
+    return;
+  }
+  if (!sid) { main.innerHTML = `<h1>Nothing to show here</h1><p><a href="./">Go to the store</a></p>`; return; }
+
+  let tries = 0;
+  async function check() {
+    tries++;
+    try {
+      const res = await fetch(`${CFG.functions}/checkout`, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: CFG.storeKey }, body: JSON.stringify({ action: 'status', session_id: sid }) });
+      const r = await res.json();
+      if (!res.ok) throw new Error(r.error || 'error');
+      if (r.ready) return show(r.order);
+      if (r.state === 'expired') return fail('This checkout expired before it was paid. Nothing was charged.');
+      if (r.state === 'open') return fail("This payment wasn't finished. Nothing was charged.");
+    } catch (e) { if (tries > 3) console.warn(e); }
+    if (tries < 40) setTimeout(check, tries < 10 ? 1500 : 4000);
+    else fail(`We got your payment but couldn't confirm it here yet. Your order number is on your Stripe receipt email. If it isn't, email ${mail}.`);
+  }
+  function fail(msg) { main.innerHTML = `<div class="kicker">Hmm</div><h1>Almost</h1><p>${esc(msg)}</p><p><a class="btn" href="./#plans">Back to plans</a></p>`; }
+  function show(o) {
+    const c = o.config || {};
+    main.innerHTML = `<div class="kicker">You're all set</div><h1>Welcome to aARgon3.</h1>
+      <p>${esc(o.plan)} · ${esc(c.service_tier || '')} · ${esc(c.os || '')} on ${esc(c.chip || '')}</p>
+      <div class="orderno" id="no">${esc(o.order_id)}</div>
+      <div><button class="btn small" id="cp">Copy order number</button></div>
+      <p class="fine">It's also on your Stripe receipt${o.email ? ` sent to ${esc(o.email)}` : ''}. Keep it somewhere safe.</p>
+      <div class="card redeem"><div class="kicker">Redeem it in Nexus '28</div>
+        <div class="steps" style="grid-template-columns:1fr">
+          <div><b>Open Nexus '28</b><p>Don't have it yet? <a href="${esc(CFG.nexusSite)}">Download it free</a> for Mac or Windows.</p></div>
+          <div><b>Settings → Account → Redeem an order</b><p>Paste your order number. Your models unlock right away, and your Your System card shows your LentOS and chip.</p></div>
+          <div><b>Bring your team</b><p>On Business and Enterprise (and Personal Pro and Max), invite people to your order from the same screen.</p></div>
+        </div></div>`;
+    document.getElementById('cp').onclick = async e => { try { await navigator.clipboard.writeText(o.order_id); e.target.textContent = 'Copied ✓'; } catch { getSelection().selectAllChildren(document.getElementById('no')); } };
+  }
+  check();
+})();
+</script>
+</body>
+</html>
