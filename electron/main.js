@@ -61,8 +61,32 @@ function openPayment(url) {
   payWin.on('closed', () => { payWin = null; });
 }
 
-// New versions: a note in the terminal with a download link (an unsigned app can't replace itself).
-async function checkUpdates(manual) {
+// New versions.
+//   Windows: updates itself. electron-updater reads latest.yml from the GitHub Release, downloads the new installer in the
+//   background, and installs it when you restart (or the next time you quit). You get a note when it's ready.
+//   Mac: an unsigned app can't replace itself, so it's a note in the terminal with a download link.
+let updater = null, updateReady = null, manualCheck = false;
+function setupWindowsUpdates() {
+  if (!WIN || !app.isPackaged) return false;
+  try { ({ autoUpdater: updater } = require('electron-updater')); } catch { return false; }
+  updater.autoDownload = true;
+  updater.autoInstallOnAppQuit = true;
+  updater.on('update-available', i => win?.webContents.send('update', { downloading: i.version }));
+  updater.on('update-not-available', () => { if (manualCheck) win?.webContents.send('update', { current: app.getVersion() }); manualCheck = false; });
+  updater.on('update-downloaded', i => { updateReady = i.version; win?.webContents.send('update', { ready: i.version }); });
+  updater.on('error', e => { console.error('[update]', e?.message || e); if (manualCheck) checkRelease(true); manualCheck = false; });
+  setInterval(() => updater.checkForUpdates().catch(() => {}), 4 * 3600e3);   // and every 4 hours while it's open
+  return true;
+}
+function checkUpdates(manual) {
+  if (updater) {
+    if (updateReady) return win?.webContents.send('update', { ready: updateReady });
+    manualCheck = manual;
+    return updater.checkForUpdates().catch(() => { if (manual) checkRelease(true); });
+  }
+  return checkRelease(manual);
+}
+async function checkRelease(manual) {
   try {
     const res = await net.fetch('https://api.github.com/repos/apojidelegraphics/aArgon3/releases/latest', { headers: { 'User-Agent': 'aARgon3' } });
     if (!res.ok) throw new Error(res.status);
@@ -75,6 +99,7 @@ async function checkUpdates(manual) {
 ipcMain.handle('version', () => app.getVersion());
 ipcMain.on('pay', (_e, url) => openPayment(String(url || '')));
 ipcMain.on('releases', () => shell.openExternal(RELEASES));
+ipcMain.on('install-update', () => { if (updater && updateReady) setImmediate(() => updater.quitAndInstall(true, true)); });
 ipcMain.on('attention', () => { if (win && !win.isFocused()) { if (MAC) app.dock?.bounce('informational'); else win.flashFrame(true); } });
 
 function menu() {
@@ -97,7 +122,7 @@ function menu() {
 
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } });
 app.whenReady().then(() => {
-  serve(); menu(); createWindow();
+  serve(); setupWindowsUpdates(); menu(); createWindow();
   if (MAC) app.setAboutPanelOptions({ applicationName: 'aARgon3', copyright: '© 2026 Apoji Delegraphics. All rights reserved.' });
   app.on('activate', () => { if (!win) createWindow(); else win.show(); });
 });

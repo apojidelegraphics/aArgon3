@@ -21,6 +21,8 @@
     setTimeout(() => t.remove(), onClick ? 20000 : kind === 'bad' ? 8000 : 4500);
   }
   const fmtTime = d => new Date(d).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  // "6 AM–5 PM" / "9:30 AM–2 PM": short enough to sit on one line in a schedule cell
+  const shortTime = d => { const t = new Date(d); return t.toLocaleTimeString([], t.getMinutes() ? { hour: 'numeric', minute: '2-digit' } : { hour: 'numeric' }); };
   const fmtDay = d => new Date(d).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
   const fmtDate = d => new Date(d + (String(d).length === 10 ? 'T12:00' : '')).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
   const fmtWhen = d => { const x = new Date(d), today = new Date().toDateString() === x.toDateString(); return today ? `Today ${fmtTime(x)}` : `${fmtDay(x)} ${fmtTime(x)}`; };
@@ -30,7 +32,7 @@
   const avatar = (name, color, cls = '') => `<div class="av ${cls}" style="${color ? `background:${esc(color)}` : ''}">${esc(initials(name))}</div>`;
   const localInput = d => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 16); };
   const ymd = d => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 10); };
-  const statusPill = s => { s = String(s || '').toUpperCase(); return `<span class="pill ${s === 'ACTIVE' || s === 'PAID' || s === 'APPROVED' ? 'ok' : /CANCEL|REFUND|VOID|DENIED/.test(s) ? 'bad' : s === 'DRAFT' ? 'dim' : 'warn'}">${esc(s || '—')}</span>`; };
+  const statusPill = s => { s = String(s || '').toUpperCase(); return `<span class="pill ${s === 'ACTIVE' || s === 'PAID' || s === 'APPROVED' ? 'ok' : /CANCEL|REFUND|VOID|DENIED/.test(s) ? 'bad' : s === 'DRAFT' ? 'dim' : s === 'REQUESTED' ? 'info' : 'warn'}">${esc(s || '—')}</span>`; };
   const roleName = r => ({ owner: 'Owner', manager: 'Manager', employee: 'Employee' }[r] || r);
   const tierName = t => C.tiers[t]?.name || (t ? t[0].toUpperCase() + t.slice(1) : '—');
   const big = n => money(Math.round(Number(n) || 0));
@@ -91,7 +93,9 @@
   async function refresh() {
     const r = await api('me');
     const before = S.overview?.today?.orders;
-    S.me = r.user; S.state = r.state; S.overview = r.overview; S.store = r.store || { open: true }; S.fetchedAt = Date.now();
+    const reqBefore = S.requests;
+    S.me = r.user; S.state = r.state; S.overview = r.overview; S.requests = r.requests || 0;
+    if (reqBefore != null && S.requests > reqBefore) { toast('New custom order request from the website.', 'ok', () => { quoteFilter = 'requested'; go('quotes'); }); desk?.attention?.(); } S.store = r.store || { open: true }; S.fetchedAt = Date.now();
     if (before != null && r.overview?.today?.orders > before && !S.sale) { toast(`New order! ${r.overview.today.orders} today.`, 'ok', () => go('orders')); desk?.attention?.(); }
     paintClock(); paintMe(); paintBadges();
   }
@@ -132,7 +136,8 @@
     { id: 'today', icon: 'today', label: 'Today', group: '' }, { id: 'sale', icon: 'sale', label: 'New sale', short: 'Sell', group: '' },
     { id: 'orders', icon: 'orders', label: 'Orders', group: '' }, { id: 'catalog', icon: 'catalog', label: 'Catalog', group: '' },
     { id: 'schedule', icon: 'schedule', label: 'Schedule', group: 'YOUR WORK' }, { id: 'time', icon: 'time', label: 'Timesheet', group: 'YOUR WORK' },
-    { id: 'sales', icon: 'sales', label: 'Sales', group: 'YOUR WORK', label2: 'My sales' }, { id: 'profile', icon: 'profile', label: 'Profile', group: 'YOUR WORK' },
+    { id: 'sales', icon: 'sales', label: 'Sales', group: 'YOUR WORK', label2: 'My sales' }, { id: 'points', icon: 'star', label: 'Points', group: 'YOUR WORK', label2: 'My points' },
+    { id: 'profile', icon: 'profile', label: 'Profile', group: 'YOUR WORK' },
     { id: 'quotes', icon: 'quotes', label: 'Custom orders', group: 'MANAGER', role: 'manager' }, { id: 'promos', icon: 'promos', label: 'Promotions', group: 'MANAGER', role: 'manager' },
     { id: 'team', icon: 'team', label: 'Team', group: 'MANAGER', role: 'manager' }, { id: 'activity', icon: 'activity', label: 'Activity', group: 'MANAGER', role: 'manager' },
     { id: 'settings', icon: 'settings', label: 'Settings', group: 'OWNER', role: 'owner' }];
@@ -142,10 +147,10 @@
     $('app').innerHTML = `<div class="shell">
       <aside class="side"><div class="brand"><img src="../icons/icon-192.png" alt=""><div>AARGON3<small>TERMINAL</small></div></div>
         ${visible().map((p, i) => { const g = p.group !== last ? (last = p.group, p.group ? `<div class="sect">${p.group}</div>` : '') : '';
-          return `${g}<button class="nav" data-p="${p.id}" title="${esc(p.label)}">${ic(p.icon)}<span class="lbl">${esc(p.id === 'sales' && !can('manager') ? p.label2 : p.label)}</span><span class="badge" data-badge="${p.id}" hidden></span>${i < 9 ? `<kbd>${MOD}${i + 1}</kbd>` : ''}</button>`; }).join('')}
+          return `${g}<button class="nav" data-p="${p.id}" title="${esc(p.label)}">${ic(p.icon)}<span class="lbl">${esc(p.label2 && !can('manager') ? p.label2 : p.label)}</span><span class="badge" data-badge="${p.id}" hidden></span>${i < 9 ? `<kbd>${MOD}${i + 1}</kbd>` : ''}</button>`; }).join('')}
         <div class="sp"></div><div class="me" id="me"></div></aside>
       <main class="main"><header class="top"><img class="mlogo" src="../icons/icon-192.png" alt=""><h2 id="title"></h2><span class="sp"></span><div class="clock" id="clock"></div></header><div id="page"></div></main>
-      <nav class="tabs">${TABS.map(id => { const p = PAGES.find(x => x.id === id); return `<button class="tab" data-p="${id}">${ic(p.icon, 20)}<span>${esc(p.short || p.label)}</span></button>`; }).join('')}
+      <nav class="tabs">${TABS.map(id => { const p = PAGES.find(x => x.id === id); return `<button class="tab" data-p="${id}">${ic(p.icon, 20)}<span>${esc(p.short || p.label)}</span><span class="badge" data-badge="${id}" hidden></span></button>`; }).join('')}
         <button class="tab" id="more">${ic('menu', 20)}<span>More</span><span class="badge" data-badge="more" hidden></span></button></nav></div>`;
     document.querySelectorAll('.nav, .tab[data-p]').forEach(b => b.onclick = () => go(b.dataset.p));
     $('more').onclick = moreSheet;
@@ -158,7 +163,7 @@
     let last = null;
     sheet(`<div class="more-head">${avatar(S.me.name, S.me.color)}<div><b>${esc(S.me.name)}</b><small>${S.me.owner ? 'Owner' : roleName(S.me.role)} · ${esc(S.me.email || '')}</small></div></div>
       ${visible().filter(p => !TABS.includes(p.id)).map(p => { const g = p.group !== last ? (last = p.group, `${p.group ? `<div class="sect">${p.group}</div>` : ''}`) : '';
-        return `${g}<button class="nav ${S.page === p.id ? 'on' : ''}" data-p="${p.id}">${ic(p.icon)}<span class="lbl">${esc(p.id === 'sales' && !can('manager') ? p.label2 : p.label)}</span></button>`; }).join('')}
+        return `${g}<button class="nav ${S.page === p.id ? 'on' : ''}" data-p="${p.id}">${ic(p.icon)}<span class="lbl">${esc(p.label2 && !can('manager') ? p.label2 : p.label)}</span><span class="badge" data-badge="${p.id}" hidden></span></button>`; }).join('')}
       <button class="nav" id="mso">${ic('power')}<span class="lbl">Sign out</span></button>`,
       (el, close) => { el.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { close(); go(b.dataset.p); }); el.querySelector('#mso').onclick = () => { close(); signOut(); }; }, 'more-sheet');
   }
@@ -176,19 +181,19 @@
     $('so').onclick = signOut;
   }
   function paintBadges() {
-    const b = document.querySelector('[data-badge="schedule"]');
-    const n = can('manager') ? S.state?.pending_time_off || 0 : 0;
-    document.querySelectorAll('[data-badge="schedule"], [data-badge="more"]').forEach(x => { x.hidden = !n; x.textContent = n; });
+    const n = { schedule: can('manager') ? S.state?.pending_time_off || 0 : 0, quotes: can('manager') ? S.requests || 0 : 0 };
+    n.more = Object.entries(n).filter(([k]) => !TABS.includes(k)).reduce((m, [, v]) => m + v, 0);
+    document.querySelectorAll('[data-badge]').forEach(x => { const v = n[x.dataset.badge] || 0; x.hidden = !v; x.textContent = v; });
   }
   function go(page) {
     const p = visible().find(x => x.id === page) || PAGES[0];
     S.page = p.id; if (location.hash !== '#' + p.id) history.replaceState(null, '', '#' + p.id);
     document.querySelectorAll('.nav, .tab[data-p]').forEach(b => b.classList.toggle('on', b.dataset.p === p.id));
     $('more')?.classList.toggle('on', !TABS.includes(p.id));
-    $('title').textContent = p.id === 'sales' && !can('manager') ? p.label2 : p.label;
+    $('title').textContent = p.label2 && !can('manager') ? p.label2 : p.label;
     $('page').innerHTML = '<div class="wrap" id="pg"></div>'; $('page').scrollTop = 0;
     ({ today: pageToday, sale: pageSale, orders: pageOrders, catalog: pageCatalog, schedule: pageSchedule, time: pageTime, sales: pageSales, profile: pageProfile,
-       quotes: pageQuotes, promos: pagePromos, team: pageTeam, activity: pageActivity, settings: pageSettings })[p.id]();
+       points: pagePoints, quotes: pageQuotes, promos: pagePromos, team: pageTeam, activity: pageActivity, settings: pageSettings })[p.id]();
   }
 
   // ================================================================ the clock (top bar)
@@ -273,7 +278,8 @@
         <div class="card"><h3>On the clock now<small>${(o.on_clock || []).length}</small></h3><div class="people">${(o.on_clock || []).map(p => `<div class="person">${avatar(p.name)}<div><b>${esc(p.name)}</b><small>#${esc(p.store_code)} · since ${fmtTime(p.clock_in)}${p.late_minutes ? ` · ${p.late_minutes}m late` : ''}</small></div><div class="r">${p.on_break ? '<span class="pill warn">BREAK</span>' : hm(p.minutes)}</div></div>`).join('') || '<div class="empty" style="padding:20px">Nobody yet.</div>'}</div>
           ${s || free() ? `<button class="btn primary block" id="newsale" style="margin-top:14px">${ic('sale', 16)} New sale</button>` : ''}</div>
       </div>
-      <div class="grid2" style="margin-top:12px">
+      <div class="${free() ? 'grid2' : 'grid3'}" style="margin-top:12px">
+        ${!free() ? `<div class="card ptsmini" id="ptsmini"><h3>${ic('star')} Your points</h3><div class="empty"><span class="spin"></span></div></div>` : ''}
         <div class="card"><h3>Your next shifts</h3>${(S.state?.upcoming || []).length ? `<div class="people">${S.state.upcoming.map(u => `<div class="person"><div class="av" style="background:var(--panel2);color:var(--accent)">${ic('schedule', 15)}</div><div><b>${fmtDay(u.starts_at)}</b><small>${fmtTime(u.starts_at)}–${fmtTime(u.ends_at)}${u.store_code ? ` · #${esc(u.store_code)}` : ''}${u.note ? ` · ${esc(u.note)}` : ''}</small></div></div>`).join('')}</div>` : '<p class="muted" style="margin:0">Nothing scheduled. <a href="#schedule" id="toSched">See the schedule</a></p>'}</div>
         <div class="card"><h3>Quick links</h3><div class="row">
           <button class="btn small" data-go="orders">${ic('search', 15)} Find an order</button><button class="btn small" data-go="catalog">${ic('catalog', 15)} What's in each plan</button>
@@ -281,6 +287,10 @@
           ${can('manager') && S.state?.pending_time_off ? `<button class="btn small" data-go="schedule">${ic('bell', 15)} ${S.state.pending_time_off} time-off request${S.state.pending_time_off === 1 ? '' : 's'}</button>` : ''}</div></div>
       </div>`;
     wireGate();
+    if ($('ptsmini')) api('points', { mine: true }).then(r => { const el = $('ptsmini'); if (!el) return;
+      el.innerHTML = `<h3>${ic('star')} Your points</h3><div class="ptsbig ${r.mine.total < 0 ? 'neg' : ''}">${r.mine.total}</div><div class="muted" style="font-size:13px">${r.mine.month >= 0 ? '+' : ''}${r.mine.month} this month</div>
+        ${r.history[0] ? `<div class="ptlast">${ptRow(r.history[0], true)}</div>` : ''}<button class="btn small quiet" data-go="points" style="margin-top:8px">See all ${ic('right', 14)}</button>`;
+      el.querySelector('[data-go]').onclick = () => go('points'); }).catch(() => { const el = $('ptsmini'); if (el) el.innerHTML = `<h3>${ic('star')} Your points</h3><p class="muted" style="margin:0">Points start after the 2.3 update.</p>`; });
     $('newsale') && ($('newsale').onclick = () => go('sale'));
     $('fix') && ($('fix').onclick = e => clockOut({ at: new Date($('leftAt').value).toISOString(), note: 'Forgot to clock out' }, e.target));
     $('openStore') && ($('openStore').onclick = e => busy(e.target, async () => { await api('settings_save', { key: 'store', value: { open: true, message: '' } }); await refresh(); go('today'); toast('The store is open.', 'ok'); }).catch(() => {}));
@@ -501,7 +511,7 @@
     $('grid').innerHTML = `<div class="week"><div class="hd">Person</div>${days.map(d => `<div class="hd ${ymd(d) === today ? 'today' : ''}">${d.toLocaleDateString([], { weekday: 'short' })}<b>${d.getDate()}</b></div>`).join('')}
       ${people.map(p => `<div class="who ${p.user_id === S.me.id ? 'me-row' : ''}">${avatar(p.name, p.color)}<div>${esc(p.name)}<small>${esc(p.title || roleName(p.role) || '')}</small></div></div>
         ${days.map(d => { const list = shifts.filter(c => c.user_id === p.user_id && ymd(c.starts_at) === ymd(d)), offDay = isOff(p.user_id, d);
-          return `<div class="cell ${mgr ? 'can' : ''} ${offDay ? 'off' : ''} ${p.user_id === S.me.id ? 'me-row' : ''}" data-u="${esc(p.user_id)}" data-d="${ymd(d)}">${list.map(c => `<button class="chipx ${p.user_id === S.me.id ? 'me' : ''} ${c.worked != null ? 'done' : ''} ${c.time_off ? 'flag' : ''}" data-id="${c.id}">${fmtTime(c.starts_at)}–${fmtTime(c.ends_at)}<small>${c.store_code ? `#${esc(c.store_code)}` : 'Any store'}${c.note ? ` · ${esc(c.note)}` : ''}${c.worked != null ? ` · worked ${hm(c.worked)}` : ''}</small></button>`).join('')}${offDay && !list.length ? '<small class="muted">Off</small>' : ''}</div>`; }).join('')}`).join('')}</div>`;
+          return `<div class="cell ${mgr ? 'can' : ''} ${offDay ? 'off' : ''} ${p.user_id === S.me.id ? 'me-row' : ''}" data-u="${esc(p.user_id)}" data-d="${ymd(d)}">${list.map(c => `<button class="chipx ${p.user_id === S.me.id ? 'me' : ''} ${c.worked != null ? 'done' : ''} ${c.time_off ? 'flag' : ''}" data-id="${c.id}" title="${esc(`${fmtTime(c.starts_at)}–${fmtTime(c.ends_at)} · ${c.store_code ? '#' + c.store_code : 'Any store'}${c.note ? ' · ' + c.note : ''}`)}"><span class="t">${shortTime(c.starts_at)}–${shortTime(c.ends_at)}</span><small>${c.store_code ? `#${esc(c.store_code)}` : 'Any store'}${c.note ? ` · ${esc(c.note)}` : ''}${c.worked != null ? ` · worked ${hm(c.worked)}` : ''}</small></button>`).join('')}${offDay && !list.length ? '<small class="muted">Off</small>' : ''}</div>`; }).join('')}`).join('')}</div>`;
     if (!mgr) return;
     $('grid').querySelectorAll('.cell.can').forEach(cell => cell.onclick = e => {
       const chip = e.target.closest('.chipx');
@@ -641,6 +651,79 @@
   }
 
   // ================================================================ Profile
+  // ================================================================ points (behavior)
+  const PT_PRESETS = [[2, 'Great customer service'], [1, 'Helped a teammate'], [3, 'Covered a shift'], [2, 'Big sale'], [5, 'Went above and beyond'], [1, 'Kept the store spotless'],
+    [-1, 'Late'], [-1, 'Phone out on the floor'], [-1, 'Forgot to clock out'], [-3, 'Rude to a customer'], [-5, 'No-show'], [-2, 'Left early without asking']];
+  const ptVal = n => `<span class="pv ${n < 0 ? 'neg' : 'pos'}">${n > 0 ? '+' : ''}${n}</span>`;
+  function ptRow(x, compact, canUndo) {
+    return `<div class="ptrow ${x.undone ? 'undone' : ''}">${ptVal(x.points)}<div class="pt-what"><b>${esc(x.reason)}</b><small>${compact ? '' : `${esc(x.name || '')} · `}${x.kind === 'late' ? 'automatic' : `from ${esc(x.given_by || '—')}`} · ${fmtWhen(x.created_at)}${x.undone ? ` · undone by ${esc(x.undone_by || '')}` : ''}</small></div>
+      ${canUndo && !x.undone ? `<button class="btn quiet small" data-undo="${x.id}">Undo</button>` : ''}</div>`;
+  }
+  let ptUser = null;
+  async function pagePoints() {
+    const pg = $('pg');
+    pg.innerHTML = '<div class="empty"><span class="spin"></span></div>';
+    let d; try { d = await api('points', ptUser ? { user_id: ptUser } : {}); } catch (e) { pg.innerHTML = `<div class="empty-card">${esc(/function|not find|schema/i.test(e.message) ? 'Points need the 2.3 database update (supabase/aargon3-2.3.sql).' : e.message)}</div>`; return; }
+    if (S.page !== 'points') return;
+    const mgr = can('manager'), m = d.mine;
+    const canUndo = x => mgr && (can('owner') || x.given_by_id === S.me.id);
+    if (!mgr) {
+      pg.innerHTML = `<div class="stats">
+          <div class="card stat"><div class="k">Your points</div><div class="v ${m.total < 0 ? 'neg' : ''}">${m.total}</div><div class="s">all time</div></div>
+          <div class="card stat"><div class="k">This month</div><div class="v">${m.month > 0 ? '+' : ''}${m.month}</div><div class="s">since the 1st</div></div>
+          <div class="card stat"><div class="k">Earned</div><div class="v" style="color:var(--mint)">+${m.given}</div><div class="s">for great work</div></div>
+          <div class="card stat"><div class="k">Lost</div><div class="v" style="color:var(--red)">${m.taken}</div><div class="s">for slip-ups</div></div></div>
+        <div class="card"><h3>History</h3><div class="ptlist">${d.history.map(x => ptRow(x, true)).join('') || '<p class="muted" style="margin:0">No points yet. Managers give points for great work (and take a few away for things like being late).</p>'}</div></div>`;
+      return;
+    }
+    const board = d.board || [], who = ptUser && board.find(r => r.user_id === ptUser);
+    const eligible = board.filter(r => r.user_id !== S.me.id && (can('owner') || r.role === 'employee'));
+    pg.innerHTML = `<div class="h-row"><p class="muted" style="margin:0">Give points for great work and take them away for slip-ups. Everyone sees their own points and history; only managers see the whole team.</p><span class="sp"></span>
+        <button class="btn primary small" id="give" ${eligible.length ? '' : 'disabled'}>${ic('star', 15)} Give points</button></div>
+      <div class="ptgrid">
+        <div class="card"><h3>Leaderboard <small>this month · all time</small></h3><div class="board">${board.map((r, i) => `<button class="brow ${r.user_id === ptUser ? 'on' : ''}" data-u="${esc(r.user_id)}">
+            <span class="rank">${i + 1}</span>${avatar(r.name, r.color)}<span class="bn"><b>${esc(r.name)}</b><small>${esc(r.title || roleName(r.role))}</small></span>
+            <span class="bm">${r.month > 0 ? '+' : ''}${r.month}</span><span class="bt ${r.total < 0 ? 'neg' : ''}">${r.total}</span></button>`).join('') || '<p class="muted">Nobody on the team yet.</p>'}</div></div>
+        <div class="card"><div class="h-row" style="margin:0 0 6px"><h3 style="margin:0">${who ? esc(who.name) : 'Recent'}</h3><span class="sp"></span>${who ? `<button class="btn quiet small" id="allp">Everyone</button>${eligible.some(r => r.user_id === who.user_id) ? `<button class="btn small" id="givep">${ic('star', 14)} Give ${esc(who.name.split(' ')[0])} points</button>` : ''}` : ''}</div>
+          ${who ? `<div class="row" style="gap:18px;margin:4px 0 12px"><div><div class="k">TOTAL</div><b class="ptsbig ${who.total < 0 ? 'neg' : ''}">${who.total}</b></div><div><div class="k">MONTH</div><b style="font-size:20px">${who.month > 0 ? '+' : ''}${who.month}</b></div><div><div class="k">EARNED</div><b style="font-size:20px;color:var(--mint)">+${who.given}</b></div><div><div class="k">LOST</div><b style="font-size:20px;color:var(--red)">${who.taken}</b></div></div>` : ''}
+          <div class="ptlist">${d.history.map(x => ptRow(x, !!who, canUndo(x))).join('') || '<p class="muted" style="margin:0">No points given yet.</p>'}</div></div></div>
+      <form class="card" id="fpts" style="margin-top:12px"><h3>${ic('time')} Automatic points</h3>
+        <div class="row" style="gap:10px"><span>A late clock-in (more than 5 minutes after a scheduled start) costs</span>
+          <select class="field" id="late" style="width:auto" ${can('owner') ? '' : 'disabled'}>${[0, -1, -2, -3, -5].map(v => `<option value="${v}" ${Number(d.settings?.late || 0) === v ? 'selected' : ''}>${v === 0 ? 'nothing (off)' : `${-v} point${v === -1 ? '' : 's'}`}</option>`).join('')}</select>
+          ${can('owner') ? '<button class="btn small">Save</button>' : '<span class="muted" style="font-size:13px">Only the owner can change this.</span>'}</div></form>`;
+    pg.querySelectorAll('.brow').forEach(b => b.onclick = () => { ptUser = ptUser === b.dataset.u ? null : b.dataset.u; pagePoints(); });
+    $('allp') && ($('allp').onclick = () => { ptUser = null; pagePoints(); });
+    $('give').onclick = () => giveSheet(eligible, null);
+    $('givep') && ($('givep').onclick = () => giveSheet(eligible, who.user_id));
+    pg.querySelectorAll('[data-undo]').forEach(b => b.onclick = async () => {
+      const x = d.history.find(h => h.id === +b.dataset.undo);
+      if (!(await confirmSheet(`Undo ${x.points > 0 ? '+' : ''}${x.points} for ${x.name}?`, `"${x.reason}" stays in the history, marked undone.`, 'Undo'))) return;
+      busy(b, async () => { await api('points_undo', { id: x.id }); toast('Undone.'); pagePoints(); }).catch(() => {});
+    });
+    $('fpts').onsubmit = e => { e.preventDefault(); busy(e.submitter, async () => { await api('settings_save', { key: 'points', value: { late: Number($('late').value) } }); toast('Saved.', 'ok'); }).catch(() => {}); };
+  }
+  function giveSheet(eligible, user) {
+    let pts = null;
+    sheet(`<div class="kicker">Points</div><h3>Give points</h3>
+      <label class="lbl">Who</label><select class="field" id="gu">${eligible.map(r => `<option value="${esc(r.user_id)}" ${r.user_id === user ? 'selected' : ''}>${esc(r.name)}${r.title ? ` · ${esc(r.title)}` : ''}</option>`).join('')}</select>
+      <label class="lbl">For</label><div class="presets">${PT_PRESETS.map(([n, why], i) => `<button type="button" class="preset ${n < 0 ? 'neg' : 'pos'}" data-i="${i}">${ptVal(n)} ${esc(why)}</button>`).join('')}</div>
+      <div class="fgrid" style="margin-top:4px"><div><label class="lbl">Points</label><input class="field" id="gp" type="number" min="-50" max="50" step="1" placeholder="e.g. 2 or -1"></div>
+        <div><label class="lbl">Reason</label><input class="field" id="gr" maxlength="200" placeholder="What it's for"></div></div>
+      <p class="muted" style="font-size:12.5px;margin:8px 0 0">They'll see the points and the reason on their Points page.</p>
+      <div class="err" id="ge"></div>
+      <div class="acts"><button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="ok">Give points</button></div>`,
+      (el, close) => {
+        el.querySelectorAll('.preset').forEach(b => b.onclick = () => { const [n, why] = PT_PRESETS[+b.dataset.i]; el.querySelector('#gp').value = n; el.querySelector('#gr').value = why;
+          el.querySelectorAll('.preset').forEach(x => x.classList.toggle('on', x === b)); });
+        el.querySelector('#ok').onclick = e => busy(e.target, async () => {
+          const n = Math.round(Number(el.querySelector('#gp').value)), why = el.querySelector('#gr').value.trim();
+          if (!n) throw new Error('Pick how many points (not 0).'); if (why.length < 2) throw new Error('Say what the points are for.');
+          const r = await api('points_give', { user_id: el.querySelector('#gu').value, points: n, reason: why });
+          close(); toast(`${n > 0 ? '+' : ''}${n} for ${r.name || 'them'}.`, 'ok'); if (S.page === 'points') pagePoints();
+        }).catch(err => { el.querySelector('#ge').textContent = err.message; });
+      });
+  }
+
   async function pageProfile() {
     const pg = $('pg');
     pg.innerHTML = '<div class="empty"><span class="spin"></span></div>';
@@ -687,10 +770,10 @@
   async function pageQuotes() {
     const pg = $('pg');
     if (S.sale?.quote && S.sale.state !== 'paid') return paintPayment();
-    pg.innerHTML = `<div class="h-row"><div class="seg" id="qf">${[['', 'All'], ['draft', 'Drafts'], ['sent', 'Sent'], ['paid', 'Paid'], ['cancelled', 'Cancelled']].map(([v, l]) => `<button data-v="${v}" class="${quoteFilter === v ? 'on' : ''}">${l}</button>`).join('')}</div><span class="sp"></span>
+    pg.innerHTML = `<div class="h-row"><div class="seg" id="qf">${[['', 'All'], ['requested', 'Requests'], ['draft', 'Drafts'], ['sent', 'Sent'], ['paid', 'Paid'], ['cancelled', 'Cancelled']].map(([v, l]) => `<button data-v="${v}" class="${quoteFilter === v ? 'on' : ''}">${l}${v === 'requested' && S.requests ? ` <span class="cnt">${S.requests}</span>` : ''}</button>`).join('')}</div><span class="sp"></span>
       <button class="btn primary small" id="newq">${ic('plus', 15)} New custom order</button><button class="btn small" id="newe">${ic('building', 15)} Enterprise quote</button></div>
       <div class="card tblcard"><table class="tbl"><thead><tr><th>Quote</th><th>Customer</th><th>What</th><th class="num">Price</th><th>Status</th><th>Made</th></tr></thead><tbody id="rows"><tr><td colspan="6" class="empty"><span class="spin"></span></td></tr></tbody></table></div>
-      <p class="muted" style="font-size:13px;margin-top:10px">Custom orders let you set the price, people, models and chip yourself, then send a payment link, an emailed invoice, or make it free. Enterprise quotes are custom orders on the Enterprise plan.</p>`;
+      <p class="muted" style="font-size:13px;margin-top:10px">Custom orders let you set the price, people, models and chip yourself, then send a payment link, an emailed invoice, or make it free. Enterprise quotes are custom orders on the Enterprise plan. Requests come from the Custom tab on the website: price one (Edit), then send it.</p>`;
     $('qf').querySelectorAll('button').forEach(b => b.onclick = () => { quoteFilter = b.dataset.v; pageQuotes(); });
     $('newq').onclick = () => quoteBuilder({ plan: 'business', tier: 'pro' });
     $('newe').onclick = () => quoteBuilder({ plan: 'enterprise', tier: 'pro', seats: 100 });
@@ -698,21 +781,21 @@
     if (!$('rows')) return;
     $('rows').innerHTML = list.map(q => `<tr class="click" data-no="${esc(q.quote_no)}"><td class="id">${esc(q.quote_no)}</td><td>${esc(q.customer?.company || q.customer?.name || '—')}<div class="muted" style="font-size:12.5px">${esc(q.customer?.company ? q.customer?.name : q.customer?.email || '')}</div></td>
       <td>${esc(C.plans[q.plan]?.name || q.plan)} · ${esc(tierName(q.tier))}<div class="muted" style="font-size:12px">${q.seats ? `${q.seats} people · ` : ''}${(q.items || []).length} models</div></td>
-      <td class="num">${q.interval === 'free' ? '<span class="pill vio">FREE</span>' : `${money(q.amount)}<span class="muted">${q.interval === 'year' ? '/yr' : q.interval === 'once' ? ' once' : '/mo'}</span>`}</td>
+      <td class="num">${q.status === 'requested' ? `<span class="muted">${q.request?.budget ? `budget ${money(q.request.budget)}` : 'to price'}</span>` : q.interval === 'free' ? '<span class="pill vio">FREE</span>' : `${money(q.amount)}<span class="muted">${q.interval === 'year' ? '/yr' : q.interval === 'once' ? ' once' : '/mo'}</span>`}</td>
       <td>${statusPill(q.status)}${q.delivery ? `<div class="muted" style="font-size:11.5px">${q.delivery === 'invoice' ? 'invoice' : q.delivery === 'link' ? 'payment link' : ''}</div>` : ''}</td><td class="muted">${fmtWhen(q.created_at)}<div style="font-size:11.5px">${esc(q.created_by || '')}</div></td></tr>`).join('')
       || `<tr><td colspan="6" class="empty">No ${quoteFilter || ''} custom orders yet.</td></tr>`;
     $('rows').querySelectorAll('tr.click').forEach(r => r.onclick = () => quoteView(list.find(q => q.quote_no === r.dataset.no)));
   }
   function quoteBuilder(q) {
     const pg = $('pg');
-    const st = { plan: q.plan || 'business', tier: q.tier || 'pro', seats: q.seats || null, interval: q.interval || 'month', amount: q.amount ?? null, os: q.config?.os || C.os[0].id,
+    const st = { plan: q.plan || 'business', tier: q.tier || 'pro', seats: q.seats || null, interval: q.interval || 'month', amount: q.status === 'requested' ? null : q.amount ?? null, os: q.config?.os || C.os[0].id,
       connection: q.config?.connection || C.connections[0].id, chip: q.config?.chip || null, models: q.items ? q.items.map(i => i.model) : null, customer: q.customer || {}, notes: q.notes || '',
       valid_until: q.valid_until || ymd(new Date(Date.now() + 30 * 864e5)) };
     const suggest = () => st.plan === 'enterprise' ? A3.enterpriseSuggest(st.tier, st.seats, st.interval === 'year' ? 'year' : 'month') : st.interval === 'once' ? price(st.plan, st.tier, 'year').amount : price(st.plan, st.tier, st.interval === 'year' ? 'year' : 'month').amount ?? 0;
     function draw() {
       const defSeats = price(st.plan, st.tier, 'month').seats, defModels = A3.items(st.tier).map(i => i.model);
       const models = st.models || defModels, chip = st.chip || C.tiers[st.tier].chip;
-      pg.innerHTML = `<div class="h-row"><button class="btn quiet small" id="back">${ic('left', 15)} Custom orders</button><h3>${q.quote_no ? `Edit ${esc(q.quote_no)}` : st.plan === 'enterprise' ? 'New Enterprise quote' : 'New custom order'}</h3></div>
+      pg.innerHTML = `<div class="h-row"><button class="btn quiet small" id="back">${ic('left', 15)} Custom orders</button><h3>${q.status === 'requested' ? `Price ${esc(q.quote_no)}` : q.quote_no ? `Edit ${esc(q.quote_no)}` : st.plan === 'enterprise' ? 'New Enterprise quote' : 'New custom order'}</h3></div>
         <div class="builder"><div class="card">
           <div class="row" style="justify-content:space-between"><div class="seg" id="pl">${PLANS.map(p => `<button data-v="${p}" class="${p === st.plan ? 'on' : ''}">${esc(C.plans[p].name)}</button>`).join('')}</div>
             <div class="seg" id="iv">${[['month', 'Monthly'], ['year', 'Yearly'], ['once', 'One time'], ['free', 'Free']].map(([v, l]) => `<button data-v="${v}" class="${st.interval === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
@@ -768,9 +851,9 @@
   function quoteView(q) {
     const c = q.customer || {}, pg = $('pg');
     pg.innerHTML = `<div class="h-row"><button class="btn quiet small" id="back">${ic('left', 15)} Custom orders</button><h3 class="mono">${esc(q.quote_no)}</h3>${statusPill(q.status)}<span class="sp"></span>
-      ${q.status === 'draft' ? `<button class="btn small" id="edit">${ic('edit', 15)} Edit</button>` : ''}${q.status !== 'paid' && q.status !== 'cancelled' ? `<button class="btn small danger" id="cq">Cancel quote</button>` : ''}</div>
+      ${q.status === 'draft' || q.status === 'requested' ? `<button class="btn small ${q.status === 'requested' ? 'primary' : ''}" id="edit">${ic('edit', 15)} ${q.status === 'requested' ? 'Price it' : 'Edit'}</button>` : ''}${q.status !== 'paid' && q.status !== 'cancelled' ? `<button class="btn small danger" id="cq">Cancel quote</button>` : ''}</div>
       <div class="grid2"><div class="card"><h3>${esc(C.plans[q.plan]?.name)} · ${esc(tierName(q.tier))}</h3><div class="kv">
-        <span>Price</span><span><b>${q.interval === 'free' ? 'Free' : money(q.amount)}</b>${q.interval === 'year' ? ' a year' : q.interval === 'month' ? ' a month' : q.interval === 'once' ? ' one time' : ''}</span>
+        <span>Price</span><span>${q.status === 'requested' ? '<span class="pill info">NOT PRICED YET</span>' : `<b>${q.interval === 'free' ? 'Free' : money(q.amount)}</b>${q.interval === 'year' ? ' a year' : q.interval === 'month' ? ' a month' : q.interval === 'once' ? ' one time' : ''}`}</span>
         <span>People</span><span>${q.seats ?? 'No limit'}</span><span>System</span><span>${esc([q.config?.os, q.config?.chip, q.config?.connection].filter(Boolean).join(' · '))}</span>
         <span>Good until</span><span>${q.valid_until ? fmtDate(q.valid_until) : '—'}</span><span>Made by</span><span>${esc(q.created_by || '—')} · ${fmtWhen(q.created_at)}</span>
         ${q.order_id ? `<span>Order</span><span class="mono">${esc(q.order_id)}</span>` : ''}${q.notes ? `<span>Notes</span><span>${esc(q.notes)}</span>` : ''}</div>
@@ -778,6 +861,10 @@
       <div class="card"><h3>${esc(c.company || c.name || 'Customer')}</h3><div class="kv">${c.company ? `<span>Contact</span><span>${esc(c.name)}${c.title ? ` · ${esc(c.title)}` : ''}</span>` : ''}
         <span>Email</span><span>${esc(c.email || '—')}</span>${c.phone ? `<span>Phone</span><span>${esc(c.phone)}</span>` : ''}${c.billing_email ? `<span>Billing email</span><span>${esc(c.billing_email)}</span>` : ''}
         ${c.node ? `<span>Node</span><span class="mono">${esc(c.node)}</span>` : ''}${c.jurisdiction ? `<span>Jurisdiction</span><span>${esc(c.jurisdiction)}</span>` : ''}</div></div></div>
+      ${q.request ? `<div class="card req" style="margin-top:12px"><h3>${ic('sparkles')} What they asked for <small>from the website · ${fmtWhen(q.request.at || q.created_at)}</small></h3><div class="kv">
+        <span>Budget</span><span>${q.request.budget ? `${money(q.request.budget)} ${q.request.interval === 'year' ? 'a year' : q.request.interval === 'once' ? 'one time' : 'a month'}` : 'Not given'}</span>
+        <span>Billing</span><span>${q.request.interval === 'year' ? 'Yearly' : q.request.interval === 'once' ? 'One payment' : 'Monthly'}</span>
+        <span>People</span><span>${esc(q.request.seats ?? q.seats ?? '—')}</span>${q.request.notes ? `<span>Their notes</span><span style="white-space:pre-wrap">${esc(q.request.notes)}</span>` : ''}</div></div>` : ''}
       <div class="card" style="margin-top:12px" id="sendBox"></div>`;
     $('back').onclick = () => go('quotes');
     $('edit') && ($('edit').onclick = () => quoteBuilder(q));
@@ -788,6 +875,8 @@
     const box = $('sendBox');
     if (q.status === 'paid') { box.innerHTML = `<h3 style="color:var(--mint)">✓ Paid</h3><p class="muted" style="margin:0">Order <span class="mono">${esc(q.order_id || '')}</span>. Find it in Orders.</p>`; return; }
     if (q.status === 'cancelled') { box.innerHTML = '<h3>Cancelled</h3><p class="muted" style="margin:0">Make a new custom order if they still want it.</p>'; return; }
+    if (q.status === 'requested') { box.innerHTML = `<h3>Price it, then send it</h3><p class="muted" style="margin:0 0 12px">Nothing has been charged. Set the price (and change anything else), save, and you can send a payment link or an invoice to ${esc(c.email || 'them')}. Not doing it? Cancel the quote.</p><button class="btn primary" id="price">${ic('edit', 15)} Price it</button>`;
+      $('price').onclick = () => quoteBuilder(q); return; }
     box.innerHTML = q.interval === 'free' ? `<h3>Create it</h3><p class="muted">This custom order is free: it becomes a working order right away (logged under your name).</p><button class="btn primary" id="sf">${ic('gift', 15)} Create free order</button>`
       : `<h3>${q.status === 'sent' ? 'Sent' : 'Send it'}</h3>${q.status === 'sent' && q.url ? `<p class="muted" style="margin:0 0 10px">${q.delivery === 'invoice' ? 'Stripe emailed an invoice. It turns into an order when it\'s paid.' : 'A payment link was made.'} <a href="${esc(q.url)}" target="_blank" rel="noopener">${q.delivery === 'invoice' ? 'Open the invoice' : 'Open the link'} ${ic('external', 13)}</a></p>` : ''}
         <div class="grid2"><div class="card" style="background:var(--panel2)"><b>${ic('qr')} Payment link</b><p class="muted" style="font-size:13.5px">A Stripe checkout with a QR code. Good when they're with you, or to text them.</p><button class="btn primary" id="sl">Make payment link</button></div>
@@ -847,16 +936,18 @@
   async function pageTeam() {
     const pg = $('pg');
     pg.innerHTML = `<div class="h-row"><p class="muted" style="margin:0">Nexus admins are added the first time they sign in. Add anyone else by the email they use for Nexus.</p><span class="sp"></span><button class="btn primary small" id="add">${ic('plus', 15)} Add person</button></div>
-      <div class="card tblcard"><table class="tbl"><thead><tr><th>Person</th><th>Role</th><th>Now</th><th>Usual store</th><th class="num">This week</th><th class="num">Sales this month</th>${can('owner') ? '<th class="num">Pay</th>' : ''}<th></th></tr></thead><tbody id="rows"><tr><td colspan="8" class="empty"><span class="spin"></span></td></tr></tbody></table></div>`;
+      <div class="card tblcard"><table class="tbl"><thead><tr><th>Person</th><th>Role</th><th>Now</th><th>Usual store</th><th class="num">This week</th><th class="num">Sales this month</th><th class="num">Points</th>${can('owner') ? '<th class="num">Pay</th>' : ''}<th></th></tr></thead><tbody id="rows"><tr><td colspan="9" class="empty"><span class="spin"></span></td></tr></tbody></table></div>`;
     $('add').onclick = () => personSheet(null);
-    let list; try { list = await api('team'); } catch (e) { $('rows') && ($('rows').innerHTML = `<tr><td colspan="8" class="empty">${esc(e.message)}</td></tr>`); return; }
+    let list, pts = {};
+    try { [list, pts] = await Promise.all([api('team'), api('points').then(r => Object.fromEntries((r.board || []).map(x => [x.user_id, x]))).catch(() => ({}))]); }
+    catch (e) { $('rows') && ($('rows').innerHTML = `<tr><td colspan="9" class="empty">${esc(e.message)}</td></tr>`); return; }
     if (!$('rows')) return;
     S.team = list;
     $('rows').innerHTML = list.map((s, i) => `<tr class="click" data-i="${i}" style="${s.active ? '' : 'opacity:.5'}"><td><div class="row" style="gap:10px;flex-wrap:nowrap">${avatar(s.name, s.color)}<div><b>${esc(s.name)}</b><div class="muted" style="font-size:12.5px">${esc(s.title ? `${s.title} · ` : '')}${esc(s.email)}</div></div></div></td>
       <td>${s.role === 'owner' ? `<span class="pill vio">${ic('crown', 11)} OWNER</span>` : s.role === 'manager' ? '<span class="pill info">MANAGER</span>' : '<span class="pill dim">EMPLOYEE</span>'}</td>
       <td>${!s.active ? '<span class="pill bad">OFF</span>' : !s.signed_in ? '<span class="pill warn">INVITED</span>' : s.on_clock ? `<span class="pill ok">${s.on_clock.on_break ? 'BREAK' : 'ON'} · #${esc(s.on_clock.store_code)}</span>` : `<span class="muted" style="font-size:12.5px">${s.last_seen ? 'seen ' + fmtWhen(s.last_seen) : '—'}</span>`}</td>
-      <td class="muted">${s.default_store ? '#' + esc(s.default_store) : '—'}</td><td class="num">${hm(s.week_minutes || 0)}</td><td class="num">${money(Number(s.month_sales) || 0)}</td>${can('owner') ? `<td class="num">${s.pay_rate != null ? money(Number(s.pay_rate)) + '/h' : '—'}</td>` : ''}
-      <td class="num">${ic('edit', 15)}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">Nobody yet.</td></tr>';
+      <td class="muted">${s.default_store ? '#' + esc(s.default_store) : '—'}</td><td class="num">${hm(s.week_minutes || 0)}</td><td class="num">${money(Number(s.month_sales) || 0)}</td><td class="num">${pts[s.user_id] ? `<b class="${pts[s.user_id].total < 0 ? 'neg' : ''}">${pts[s.user_id].total}</b>` : '<span class="muted">—</span>'}</td>${can('owner') ? `<td class="num">${s.pay_rate != null ? money(Number(s.pay_rate)) + '/h' : '—'}</td>` : ''}
+      <td class="num">${ic('edit', 15)}</td></tr>`).join('') || '<tr><td colspan="9" class="empty">Nobody yet.</td></tr>';
     $('rows').querySelectorAll('tr.click').forEach(r => r.onclick = () => personSheet(list[+r.dataset.i]));
   }
   function personSheet(p) {
@@ -962,7 +1053,22 @@
   });
   setInterval(() => { if (S.me && document.visibilityState === 'visible' && !document.querySelector('.scrim')) refresh().then(() => { if (S.page === 'today') go('today'); }).catch(() => {}); }, 60e3);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.me) quiet(refresh()); });
-  desk?.onUpdate?.(u => u.latest ? toast(`aARgon3 ${u.latest} is out. Click here to download it.`, 'ok', () => desk.openReleases()) : u.current && toast(`You're on the latest version (${u.current}).`));
+  desk?.onUpdate?.(u => {
+    if (u.ready) return updateBar(u.ready);                                              // Windows: downloaded, restart to finish
+    if (u.downloading) return toast(`Downloading aARgon3 ${u.downloading} in the background…`);
+    if (u.latest) return toast(`aARgon3 ${u.latest} is out. Click here to download it.`, 'ok', () => desk.openReleases());   // Mac
+    if (u.current) toast(`You're on the latest version (${u.current}).`);
+  });
+  function updateBar(v) {
+    if (document.querySelector('.updbar')) return;
+    const b = document.createElement('div'); b.className = 'updbar';
+    b.innerHTML = `${ic('download', 16)}<span><b>aARgon3 ${esc(v)} is ready.</b> Restart to update; it takes a few seconds and keeps you signed in.</span><button class="btn small primary">Restart now</button><button class="btn small quiet" aria-label="Later">Later</button>`;
+    b.querySelector('.primary').onclick = () => {
+      b.querySelector('.primary').innerHTML = '<span class="spin"></span>'; desk.installUpdate();
+    };
+    b.querySelector('.quiet').onclick = () => { b.remove(); toast('It will install the next time you quit aARgon3.'); };
+    document.body.append(b);
+  }
   desk?.onMenu?.(p => S.me && (p === 'signout' ? signOut() : go(p)));
   start();
 })();

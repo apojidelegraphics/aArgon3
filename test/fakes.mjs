@@ -17,7 +17,7 @@ export function world({ legacy = false } = {}) {
              [OUTSIDER]: { id: 'u-user', email: 'joe@x.co', level: null, nick: 'Joe' },
              [INVITED]: { id: 'u-inv', email: 'casey@shop.co', level: null, nick: 'Casey' } },
     staff: [{ id: 9, user_id: null, email: 'casey@shop.co', role: 'employee', active: true, display_name: 'Casey', pay_rate: 14 }],
-    schedule: [], timeoff: [], quotes: {}, promos: [], settings: { store: { open: true, message: '' }, business: { name: 'Apoji Delegraphics' }, goals: { monthly_revenue: 0 } } };
+    schedule: [], timeoff: [], quotes: {}, promos: [], points: [], lateNext: 0, settings: { store: { open: true, message: '' }, business: { name: 'Apoji Delegraphics' }, goals: { monthly_revenue: 0 } } };
   w.stores = [{ code: '0028', name: 'Neo Silicon Valley Flagship (Hub Zero)', region: 'A', active: true }, { code: '2710', name: 'San Francisco Soar Node', region: 'A', active: true },
     { code: '0427', name: 'Raleigh-Durham Omni-Node', region: 'B', active: true }, { code: '0001', name: 'Apoji Corporate Office NC', region: 'E', active: true }];
   const shiftOf = u => w.shifts[u] || null;
@@ -136,6 +136,20 @@ export function world({ legacy = false } = {}) {
         case 'a3_quote_save': { const p = a.p, q = w.quotes[p.quote_no] || { status: 'draft', created_at: now() }; Object.assign(q, Object.fromEntries(Object.entries(p).filter(([, v]) => v != null))); q.amount = (q.amount_cents || 0) / 100; w.quotes[p.quote_no] = q; return res(q); }
         case 'a3_quotes': return res(Object.values(w.quotes).filter(q => !a.p_status || q.status === a.p_status).reverse());
         case 'a3_quote': return res(w.quotes[String(a.p_no).toUpperCase()] ? { ...w.quotes[String(a.p_no).toUpperCase()] } : null);
+        case 'a3_quote_request': { const p = a.p, em = p.customer.email.toLowerCase();
+          if (Object.values(w.quotes).filter(q => q.source === 'web' && q.customer?.email?.toLowerCase() === em).length >= 3) return oops("We already have your requests. We'll be in touch soon.");
+          w.quotes[p.quote_no] = { ...p, status: 'requested', source: 'web', amount_cents: 0, amount: 0, created_by: 'Website', created_at: now() }; return res({ quote_no: p.quote_no }); }
+        // ---- points
+        case 'a3_points_board': { const rows = w.staff.filter(x => x.active && x.user_id).map(x => { const mine = w.points.filter(p => p.user_id === x.user_id && !p.undone);
+            return { user_id: x.user_id, name: staffName(x), role: x.role, color: x.color, title: x.title, total: mine.reduce((m, p) => m + p.points, 0),
+              month: mine.filter(p => p.created_at >= a.p_month_start).reduce((m, p) => m + p.points, 0), given: mine.filter(p => p.points > 0).reduce((m, p) => m + p.points, 0),
+              taken: mine.filter(p => p.points < 0).reduce((m, p) => m + p.points, 0), last: mine.at(-1)?.created_at || null }; });
+          return res(rows.sort((x, y) => y.total - x.total)); }
+        case 'a3_points': return res(w.points.filter(p => !a.p_user || p.user_id === a.p_user).slice().reverse().slice(0, a.p_limit).map(p => ({ ...p, name: staffName(w.staff.find(x => x.user_id === p.user_id) || { email: 'x@y' }) })));
+        case 'a3_points_give': { if (!w.staff.some(x => x.user_id === a.p_user && x.active)) return oops("That person isn't on the team.");
+          const x = { id: w.points.length + 1, user_id: a.p_user, points: a.p_points, reason: a.p_reason, kind: a.p_kind, given_by: a.p_by, given_by_id: a.p_by_id, undone: false, created_at: now() };
+          w.points.push(x); return res({ ...x }); }
+        case 'a3_points_undo': { const x = w.points.find(p => p.id === a.p_id && !p.undone); if (!x) return oops('Already undone, or not found.'); x.undone = true; x.undone_by = a.p_by; return res({ ...x }); }
         // ---- promotions
         case 'a3_promos': return res(w.promos);
         case 'a3_promo': return res(w.promos.find(x => x.code === a.p_code) || null);
@@ -154,7 +168,7 @@ export function world({ legacy = false } = {}) {
         case 'a3_clock_in': {
           if (shiftOf(a.p_user)) return oops("You're already clocked in.");
           const st = w.stores.find(s => s.code === a.p_store) || { code: a.p_store, name: '?' };
-          w.shifts[a.p_user] = { id: 7, user_id: a.p_user, name: a.p_name, store_code: st.code, store: `Store #${st.code} – ${st.name}`, clock_in: now(), clock_out: null, breaks: [], minutes: 0, on_break: false, sales: 0, orders: 0 };
+          w.shifts[a.p_user] = { id: 7, user_id: a.p_user, name: a.p_name, store_code: st.code, store: `Store #${st.code} – ${st.name}`, clock_in: now(), clock_out: null, breaks: [], minutes: 0, on_break: false, sales: 0, orders: 0, late_minutes: w.lateNext || 0 };
           return res(w.shifts[a.p_user]);
         }
         case 'a3_clock_out': { const s = { ...shiftOf(a.p_user), clock_out: now(), minutes: 412 }; delete w.shifts[a.p_user]; return res(s); }

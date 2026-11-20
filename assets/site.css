@@ -123,3 +123,6 @@ label.lbl { display: block; font: 700 11px var(--mono); letter-spacing: .18em; t
   .seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; } .seg::-webkit-scrollbar { display: none; }
   .seg button { white-space: nowrap; flex: 1 0 auto; }
 }
+
+/* text boxes only grow downward, so they can't be dragged out of their card */
+textarea.field { resize: vertical; max-width: 100%; min-height: 76px; }

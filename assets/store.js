@@ -16,13 +16,16 @@
 
   // ---------- plans
   function renderPlanSeg() {
-    $('planSeg').innerHTML = PLANS.map(p => `<button data-p="${p}" class="${p === st.plan ? 'on' : ''}">${esc(C.plans[p].name)}</button>`).join('');
+    $('planSeg').innerHTML = PLANS.map(p => `<button data-p="${p}" class="${p === st.plan ? 'on' : ''}">${esc(C.plans[p].name)}</button>`).join('')
+      + `<button data-p="custom" class="${st.plan === 'custom' ? 'on' : ''}">Custom</button>`;
     $('planSeg').querySelectorAll('button').forEach(b => b.onclick = () => { st.plan = b.dataset.p; renderPlanSeg(); renderTiers(); });
     $('billSeg').querySelectorAll('button').forEach(b => { b.classList.toggle('on', b.dataset.b === st.billing); b.onclick = () => { st.billing = b.dataset.b; renderPlanSeg(); renderTiers(); }; });
-    $('billSeg').hidden = !!C.plans[st.plan].quote;
+    $('billSeg').hidden = st.plan === 'custom' || !!C.plans[st.plan].quote;
   }
   const people = n => n == null ? 'No set limit on people' : n === 1 ? '1 person' : `Up to ${n} people`;
   function renderTiers() {
+    $('tiers').classList.toggle('custom', st.plan === 'custom');
+    if (st.plan === 'custom') return renderCustom();
     const plan = C.plans[st.plan];
     $('planBlurb').textContent = plan.blurb;
     $('tiers').innerHTML = TIERS.map(t => {
@@ -40,6 +43,71 @@
     }).join('');
     $('tiers').querySelectorAll('button[data-t]').forEach(b => b.onclick = () => openSetup(b.dataset.t));
     $('tiers').querySelectorAll('button[data-q]').forEach(b => b.onclick = () => openQuote(b.dataset.q));
+  }
+
+  // ---------- Custom: build exactly what you want; staff price it and email a payment link or invoice
+  const cu = { plan: 'business', tier: 'pro', seats: '', models: null, chip: null, os: C.os[0].id, connection: C.connections[0].id, interval: 'month', budget: '', notes: '' };
+  function renderCustom() {
+    $('planBlurb').textContent = 'Pick the people, models and hardware you want. We price it, then email you a secure Stripe link or invoice. Nothing is charged until you pay it.';
+    const defModels = A3.items(cu.tier).map(i => i.model), models = cu.models || defModels, chip = cu.chip || C.tiers[cu.tier].chip;
+    const segs = (id, list, on) => `<div class="seg" id="${id}">${list.map(([v, l]) => `<button type="button" data-v="${v}" class="${v === on ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>`;
+    $('tiers').innerHTML = `<form class="tier cbuild" id="cform" novalidate>
+      <div class="cb-head"><div><span class="flag">CUSTOM ORDER</span><h3>Build it your way</h3><div class="tag">Your people, your models, your chip. A real person prices it.</div></div>
+        <div class="cb-steps"><span><b>1</b> Build</span><span><b>2</b> We price it</span><span><b>3</b> Pay by link or invoice</span></div></div>
+      <div class="cb-grid">
+        <div><label class="lbl">Who it's for</label>${segs('cuPlan', PLANS.map(p => [p, C.plans[p].name]), cu.plan)}</div>
+        <div><label class="lbl">How many people</label><input class="field" id="cuSeats" type="number" min="1" max="100000" placeholder="${price(cu.plan, cu.tier, 'month').seats ?? 100}" value="${esc(cu.seats)}"></div>
+        <div class="wide"><label class="lbl">Start from a tier</label>${segs('cuTier', TIERS.map(t => [t, C.tiers[t].name]), cu.tier)}</div>
+        <div class="wide"><label class="lbl">Models you want <a href="#" id="cuReset">(reset to ${esc(C.tiers[cu.tier].name)}'s)</a></label>
+          <div class="cb-models">${Object.keys(C.families).filter(f => !C.families[f].free).map(f => `<div class="cb-fam"><b>${esc(C.families[f].name)}</b>
+            ${C.families[f].models.map(m => `<label class="cb-chk"><input type="checkbox" value="${esc(m)}" ${models.includes(m) ? 'checked' : ''}><span>${esc(m)}</span></label>`).join('')}</div>`).join('')}</div></div>
+        <div><label class="lbl">Quouk chip</label><select class="field" id="cuChip">${C.chips.filter(c => c.id !== 'No order').map(c => `<option ${c.id === chip ? 'selected' : ''}>${esc(c.id)}</option>`).join('')}</select></div>
+        <div><label class="lbl">LentOS</label><select class="field" id="cuOs">${C.os.map(o => `<option ${o.id === cu.os ? 'selected' : ''}>${esc(o.id)}</option>`).join('')}</select></div>
+        <div><label class="lbl">Connection</label><select class="field" id="cuConn">${C.connections.map(o => `<option ${o.id === cu.connection ? 'selected' : ''}>${esc(o.id)}</option>`).join('')}</select></div>
+        <div><label class="lbl">How you'd like to pay</label>${segs('cuIv', [['month', 'Monthly'], ['year', 'Yearly'], ['once', 'One payment']], cu.interval)}</div>
+        <div><label class="lbl">Budget <span style="opacity:.6">(optional)</span></label><div class="money-in"><input class="field" id="cuBudget" type="number" min="0" step="1" placeholder="e.g. 500" value="${esc(cu.budget)}"></div></div>
+        <div class="wide"><label class="lbl">Anything else? <span style="opacity:.6">(optional)</span></label><textarea class="field" id="cuNotes" rows="3" maxlength="1500" placeholder="Deadlines, special setups, questions">${esc(cu.notes)}</textarea></div>
+      </div>
+      <div class="cb-foot"><div class="muted" id="cuSum"></div><button class="btn primary">Next: your details</button></div>
+    </form>`;
+    const f = $('cform');
+    const keep = () => { cu.seats = f.querySelector('#cuSeats').value; cu.chip = f.querySelector('#cuChip').value; cu.os = f.querySelector('#cuOs').value; cu.connection = f.querySelector('#cuConn').value;
+      cu.budget = f.querySelector('#cuBudget').value; cu.notes = f.querySelector('#cuNotes').value; cu.models = [...f.querySelectorAll('.cb-models input:checked')].map(i => i.value); };
+    const sum = () => { const n = f.querySelectorAll('.cb-models input:checked').length; f.querySelector('#cuSum').textContent = `${C.plans[cu.plan].name} · ${n} model${n === 1 ? '' : 's'} · ${f.querySelector('#cuChip').value}`; };
+    const seg = (id, key, after) => f.querySelector('#' + id).querySelectorAll('button').forEach(b => b.onclick = () => { keep(); cu[key] = b.dataset.v; after?.(); renderCustom(); });
+    seg('cuPlan', 'plan'); seg('cuIv', 'interval'); seg('cuTier', 'tier', () => { cu.models = null; cu.chip = null; });
+    f.querySelector('#cuReset').onclick = e => { e.preventDefault(); keep(); cu.models = null; renderCustom(); };
+    f.addEventListener('change', sum); sum();
+    f.onsubmit = e => { e.preventDefault(); keep(); if (!cu.models.length) return toast('Pick at least one model.', 'bad'); openCustomDetails(); };
+  }
+  function openCustomDetails() {
+    if (st.closed) return toast(st.closedMsg || 'The store is closed for now.', 'bad');
+    const { wrap, close } = sheet(`<form class="sheet" id="cd" novalidate>
+      <div class="kicker">Custom order · ${esc(C.plans[cu.plan].name)}</div>
+      <h3>${cu.plan === 'personal' ? 'Where should we send your price?' : 'Who is asking?'}</h3>
+      <p class="muted" style="margin:4px 0 0;font-size:14px">We'll look at what you built and email you a price with a secure Stripe link or invoice, usually within a day. Nothing is charged until you pay it.</p>
+      ${window.A3forms.html(cu.plan)}
+      <input class="hp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+      <div class="err" id="er"></div>
+      <div class="acts"><button type="button" class="btn quiet" data-close>Back</button><button class="btn primary" id="go">Send my request</button></div>
+    </form>`);
+    const f = wrap.querySelector('#cd');
+    window.A3forms.wire(f, { os: cu.os });
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const go = f.querySelector('#go'), er = f.querySelector('#er'); er.textContent = '';
+      let customer; try { customer = window.A3forms.read(f, cu.plan); } catch (err) { er.textContent = err.message; return; }
+      go.disabled = true; go.innerHTML = '<span class="spin"></span> Sending…';
+      try {
+        const r = await post('checkout', { action: 'request', plan: cu.plan, tier: cu.tier, seats: cu.seats || undefined, models: cu.models, chip: cu.chip, os: cu.os, connection: cu.connection,
+          interval: cu.interval, budget: cu.budget, notes: cu.notes, customer, website: f.website.value });
+        f.innerHTML = `<div class="kicker">Request sent</div><h3>Thanks! It's <span class="mono">${esc(r.quote_no)}</span>.</h3>
+          <p class="muted" style="font-size:15px">We'll email <b>${esc(customer.billing_email || customer.email)}</b> with your price and a secure way to pay. Keep that number in case you need to reach us.</p>
+          <div class="acts"><button type="button" class="btn primary" data-close>Done</button></div>`;
+        f.querySelector('[data-close]').onclick = close;
+        cu.notes = ''; cu.budget = ''; renderCustom();
+      } catch (err) { er.textContent = err.message; go.disabled = false; go.textContent = 'Send my request'; }
+    };
   }
 
   // ---------- model families

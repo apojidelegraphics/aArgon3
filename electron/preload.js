@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('aargonDesktop', {
   version: () => ipcRenderer.invoke('version'),
   openPayment: url => ipcRenderer.send('pay', url),
   openReleases: () => ipcRenderer.send('releases'),
+  installUpdate: () => ipcRenderer.send('install-update'),
   attention: () => ipcRenderer.send('attention'),
   onUpdate: fn => ipcRenderer.on('update', (_e, u) => fn(u)),
   onMenu: fn => ipcRenderer.on('menu', (_e, p) => fn(p))

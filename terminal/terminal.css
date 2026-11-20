@@ -264,3 +264,45 @@ body.desktop.win .top { padding-right: 150px; }
   .week .who { font-size: 13px; } .week .who .av { display: none; }
 }
 @media (max-width: 380px) { .stat .v { font-size: 21px; } .clock { max-width: 56%; } }
+
+/* ================================================================ 2.3 */
+/* schedule blocks: everything stays inside the block (full details on hover) */
+.chipx { overflow: hidden; min-width: 0; }
+.chipx .t { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.chipx small { font: 500 11px/1.35 var(--sans); letter-spacing: 0; text-transform: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.week .cell { min-width: 0; overflow: hidden; }
+
+/* points */
+.neg { color: var(--red) !important; }
+.pv { flex: none; min-width: 42px; text-align: center; font: 800 14px var(--mono); padding: 5px 6px; border-radius: 10px; }
+.pv.pos { color: var(--mint); background: rgba(61,255,160,.1); border: 1px solid rgba(61,255,160,.25); }
+.pv.neg { color: var(--red); background: rgba(255,107,129,.1); border: 1px solid rgba(255,107,129,.25); }
+.ptlist { display: grid; gap: 2px; }
+.ptrow { display: flex; align-items: center; gap: 12px; padding: 9px 2px; border-bottom: 1px solid rgba(var(--rgb), .07); }
+.ptrow:last-child { border-bottom: 0; }
+.ptrow .pt-what { flex: 1; min-width: 0; } .ptrow .pt-what b { display: block; font-weight: 600; } .ptrow .pt-what small { color: var(--muted); font-size: 12.5px; }
+.ptrow.undone { opacity: .45; } .ptrow.undone .pt-what b { text-decoration: line-through; }
+.ptsbig { font: 800 34px var(--sans); letter-spacing: -.02em; line-height: 1.1; }
+.ptsmini .ptlast { margin-top: 8px; } .ptsmini .ptrow { border: 0; padding: 4px 0; }
+.ptgrid { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.ptgrid .k { font: 700 10px var(--mono); letter-spacing: .16em; color: var(--muted); }
+.board { display: grid; gap: 4px; }
+.brow { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 12px; border: 1px solid transparent; background: none; color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.brow:hover { background: rgba(var(--rgb), .05); } .brow.on { border-color: rgba(var(--rgb), .4); background: rgba(var(--rgb), .08); }
+.brow .rank { width: 18px; font: 700 12px var(--mono); color: var(--muted); text-align: center; }
+.brow:nth-child(1) .rank { color: var(--amber); } .brow .av { width: 30px; height: 30px; font-size: 12px; flex: none; }
+.brow .bn { flex: 1; min-width: 0; } .brow .bn b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .brow .bn small { color: var(--muted); font-size: 12px; }
+.brow .bm { font: 600 12.5px var(--mono); color: var(--muted); } .brow .bt { font: 800 17px var(--sans); min-width: 36px; text-align: right; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.preset { display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px 5px 5px; border-radius: 12px; border: 1px solid var(--line2); background: rgba(0,0,0,.2); color: var(--text); font: 500 13px var(--sans); cursor: pointer; }
+.preset .pv { min-width: 34px; padding: 3px 4px; font-size: 12px; } .preset:hover { border-color: rgba(var(--rgb), .4); } .preset.on { border-color: var(--accent); background: rgba(var(--rgb), .1); }
+.seg .cnt { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px; background: var(--amber); color: var(--ink); font: 700 11px/18px var(--mono); }
+.req { border-color: rgba(var(--rgb), .35); }
+@media (max-width: 900px) { .ptgrid { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .presets { max-height: 210px; overflow-y: auto; } .ptsbig { font-size: 30px; } }
+
+/* Windows: "update ready" bar */
+.updbar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 12px; max-width: min(640px, calc(100vw - 24px));
+  padding: 10px 10px 10px 16px; border-radius: 16px; border: 1px solid rgba(var(--rgb), .45); background: rgba(6,20,32,.96); backdrop-filter: blur(12px); box-shadow: 0 18px 50px rgba(0,0,0,.5); font-size: 14px; }
+.updbar .ic { color: var(--accent); flex: none; } .updbar span { flex: 1; min-width: 0; }
+@media (max-width: 760px) { .updbar { bottom: calc(78px + env(safe-area-inset-bottom)); flex-wrap: wrap; } }

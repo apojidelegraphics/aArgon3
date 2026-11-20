@@ -44,7 +44,9 @@ jobs:
           2. Run it. If Windows shows **"Windows protected your PC"** (the app isn't code-signed), click **More info → Run anyway**.
           3. Open aARgon3 from the Start menu and sign in.
 
-          Updating: the app tells you when a new version is out. Download it and replace the app (Mac: run the two commands again).
+          ## Updating
+          - **Windows:** automatic. aARgon3 downloads new versions in the background and asks you to restart (or installs the next time you quit). Coming from 2.2 or older? Install this version once by hand; after that it updates itself.
+          - **Mac:** the app tells you when a new version is out. Download it, replace the app, and run the two commands again.
           NOTES
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -67,7 +69,11 @@ jobs:
       - run: npm install --no-audit --no-fund
       - name: Build
         run: npx electron-builder --win nsis --x64 --publish never
+      # latest.yml + the .blockmap are what installed copies read to update themselves (electron-updater)
       - name: Add to the release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.exe
+          files: |
+            dist/*.exe
+            dist/*.exe.blockmap
+            dist/latest.yml

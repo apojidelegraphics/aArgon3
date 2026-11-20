@@ -338,3 +338,69 @@ test('staff: the 2.0 manager actions still work (Apoji Admin uses them)', async 
   assert.strictEqual((await call(h, { action: 'cancel', order_id: 'NOPE' }, B)).status, 404);
   assert.strictEqual((await call(h, { action: 'order', order_id: 'NOPE' }, A)).status, 404);
 });
+
+test('store: the Custom tab sends a request that lands in Custom orders, priced by staff before it can be sent', async () => {
+  const w = world(), store = checkout(ENV, w.fetch), h = staff(ENV, w.fetch);
+  // details are required, like every other order
+  assert.match((await call(store, { action: 'request', plan: 'business', tier: 'pro', customer: { first: 'Pat', email: 'pat@co.com' } })).body.error, /./);
+  const r = await call(store, { action: 'request', plan: 'business', tier: 'pro', seats: 12, interval: 'year', models: ['Neodela', 'Hailos-9.2o', 'not-a-model'], chip: 'Quouk .3o',
+    budget: 900, notes: 'Two offices, need yearly billing', customer: PAT });
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body)); assert.match(r.body.quote_no, /^Q-[A-Z0-9]{6}$/);
+  const q = w.quotes[r.body.quote_no];
+  assert.strictEqual(q.status, 'requested'); assert.strictEqual(q.seats, 12); assert.strictEqual(q.config.chip, 'Quouk .3o');
+  assert.deepStrictEqual(q.items.map(i => i.model), ['Neodela', 'Hailos-9.2o']); assert.strictEqual(q.request.budget, 900);
+  assert.strictEqual(q.customer.company, 'Doe Labs LLC');
+  // a bot that fills the hidden field gets a fake "thanks" and nothing is saved
+  const n = Object.keys(w.quotes).length;
+  assert.strictEqual((await call(store, { action: 'request', plan: 'personal', tier: 'pro', customer: PAT, website: 'http://spam' })).status, 200);
+  assert.strictEqual(Object.keys(w.quotes).length, n);
+  // managers see it waiting; it can't be sent without a price; saving it makes it a draft
+  assert.strictEqual((await call(h, { action: 'me' }, as(MANAGER))).body.requests, 1);
+  assert.strictEqual((await call(h, { action: 'me' }, as(EMPLOYEE))).body.requests, 0);
+  assert.match((await call(h, { action: 'quote_send', quote_no: q.quote_no }, as(MANAGER))).body.error, /Set a price/);
+  const saved = await call(h, { action: 'quote_save', quote_no: q.quote_no, plan: 'business', tier: 'pro', seats: 12, interval: 'year', amount: 1450, customer: PAT }, as(MANAGER));
+  assert.strictEqual(saved.status, 200, JSON.stringify(saved.body)); assert.strictEqual(w.quotes[q.quote_no].status, 'draft');
+  assert.strictEqual((await call(h, { action: 'quote_send', quote_no: q.quote_no }, as(MANAGER))).status, 200);
+  // closed store: no requests either
+  w.settings.store = { open: false, message: 'Back Monday' };
+  assert.match((await call(store, { action: 'request', plan: 'personal', tier: 'pro', customer: { ...PAT, email: 'x@y.co' } })).body.error, /Back Monday/);
+});
+
+test('staff: behavior points: managers give and undo, nobody gives themselves, employees see only their own', async () => {
+  const w = world(), h = staff(ENV, w.fetch);
+  for (const t of [OWNER, MANAGER, EMPLOYEE]) await call(h, { action: 'me' }, as(t));   // first sign-in puts them on the team
+  const give = (tok, user_id, points, reason = 'Great customer service') => call(h, { action: 'points_give', user_id, points, reason }, as(tok));
+  assert.strictEqual((await give(MANAGER, 'u-admin', 2)).status, 200);
+  assert.strictEqual((await give(MANAGER, 'u-admin', -1, 'Phone out on the floor')).status, 200);
+  assert.match((await give(MANAGER, 'u-boss', 5)).body.error, /yourself/);
+  assert.match((await give(MANAGER, 'u-owner', 5)).body.error, /owner can give managers/);
+  assert.match((await give(EMPLOYEE, 'u-boss', 5)).body.error, /managers/);
+  assert.match((await give(OWNER, 'u-boss', 0)).body.error, /-50 to 50/);
+  assert.strictEqual((await give(OWNER, 'u-boss', 3, 'Covered a shift')).status, 200);
+  // employee view: own total and history only
+  const mine = (await call(h, { action: 'points' }, as(EMPLOYEE))).body;
+  assert.strictEqual(mine.mine.total, 1); assert.strictEqual(mine.board, undefined); assert.strictEqual(mine.history.length, 2);
+  // manager view: the whole board
+  const all = (await call(h, { action: 'points' }, as(MANAGER))).body;
+  assert.deepStrictEqual(all.board.map(r => [r.name, r.total]), [['Riley', 3], ['Sam', 1], ['Lucas', 0]]);
+  // undo: a manager only their own; the owner anything
+  const ownerGift = w.points.find(p => p.given_by_id === 'u-owner');
+  assert.match((await call(h, { action: 'points_undo', id: ownerGift.id }, as(MANAGER))).body.error, /Only the owner/);
+  assert.strictEqual((await call(h, { action: 'points_undo', id: 1 }, as(MANAGER))).status, 200);
+  assert.strictEqual((await call(h, { action: 'points' }, as(EMPLOYEE))).body.mine.total, -1);
+  assert.ok(w.logs.some(l => l.p_action === 'points') && w.logs.some(l => l.p_action === 'points_undo'));
+});
+
+test('staff: a late clock-in can cost points (owner setting, off by default)', async () => {
+  const w = world(), h = staff(ENV, w.fetch);
+  await call(h, { action: 'me' }, as(EMPLOYEE));
+  w.lateNext = 9;
+  await call(h, { action: 'clock_in', store: '0028' }, as(EMPLOYEE));
+  assert.strictEqual(w.points.length, 0);                                  // off by default
+  await call(h, { action: 'clock_out' }, as(EMPLOYEE));
+  assert.match((await call(h, { action: 'settings_save', key: 'points', value: { late: -2 } }, as(MANAGER))).body.error, /owner/);
+  assert.strictEqual((await call(h, { action: 'settings_save', key: 'points', value: { late: -2 } }, as(OWNER))).status, 200);
+  await call(h, { action: 'clock_in', store: '0028' }, as(EMPLOYEE));
+  assert.deepStrictEqual(w.points.map(p => [p.user_id, p.points, p.kind]), [['u-admin', -2, 'late']]);
+  assert.match(w.points[0].reason, /9 min/);
+});

@@ -93,7 +93,8 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
     // ---------- you
     async me(who) {
       const [state, overview, info] = await Promise.all([rpc('a3_staff_state', { p_user: who.id, p_tz: TZ }), rpc('a3_overview', { p_tz: TZ }), storeInfo(rpc)]);
-      return { user: who, state, overview, store: { open: info.open, message: info.message }, catalog: A3.C.version };
+      const requests = who.manager ? await rpc('a3_quotes', { p_status: 'requested' }).then(l => (l || []).length).catch(() => 0) : 0;
+      return { user: who, state, overview, store: { open: info.open, message: info.message }, catalog: A3.C.version, requests };
     },
     async overview() { return rpc('a3_overview', { p_tz: TZ }); },
     async profile(who) {
@@ -108,7 +109,15 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
     },
 
     // ---------- the clock
-    async clock_in(who, b) { return rpc('a3_clock_in', { p_user: who.id, p_name: who.name, p_store: String(b.store || '') }); },
+    async clock_in(who, b) {
+      const r = await rpc('a3_clock_in', { p_user: who.id, p_name: who.name, p_store: String(b.store || '') });
+      // the owner can make a late clock-in cost points (Settings → Points); off (0) by default
+      if (r?.late_minutes > 0 && !who.legacy && !who.owner) {
+        const late = await rpc('a3_settings').then(x => Number(x?.points?.late) || 0).catch(() => 0);
+        if (late < 0) await rpc('a3_points_give', { p_user: who.id, p_points: late, p_reason: `Late clock-in (${r.late_minutes} min)`, p_kind: 'late', p_by: 'aARgon3', p_by_id: null }).catch(() => {});
+      }
+      return r;
+    },
     async clock_out(who, b) {
       return rpc('a3_clock_out', { p_user: who.id, p_note: b.note ? String(b.note).slice(0, 500) : null, p_at: b.at ? iso(b.at, 'time') : null });
     },
@@ -216,10 +225,11 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
     async quote_save(who, b) {
       need(who, 'manager');
       const x = quoteInput(b);
-      if (b.quote_no) { const q = await rpc('a3_quote', { p_no: b.quote_no }); if (!q) throw new Oops('No quote has that number.', 404); if (q.status !== 'draft') throw new Oops('Only drafts can be changed. Cancel it and make a new one.'); }
+      if (b.quote_no) { const q = await rpc('a3_quote', { p_no: b.quote_no }); if (!q) throw new Oops('No quote has that number.', 404); if (q.status !== 'draft' && q.status !== 'requested') throw new Oops('Only drafts can be changed. Cancel it and make a new one.'); }
       const r = await rpc('a3_quote_save', { p: { quote_no: b.quote_no || newQuoteNo(), plan: x.sel.plan, tier: x.sel.tier, seats: x.seats, interval: x.interval, amount_cents: x.cents,
         config: x.config, items: x.items, customer: x.customer, notes: b.notes ? String(b.notes).slice(0, 1000) : null,
-        valid_until: b.valid_until && /^\d{4}-\d{2}-\d{2}$/.test(b.valid_until) ? b.valid_until : null, created_by: who.name, created_by_id: who.id } });
+        valid_until: b.valid_until && /^\d{4}-\d{2}-\d{2}$/.test(b.valid_until) ? b.valid_until : null, created_by: who.name, created_by_id: who.id,
+        ...(b.quote_no ? { status: 'draft' } : {}) } });   // a website request becomes a draft once staff price it
       if (!b.quote_no) await log(who, 'quote', { quote_no: r.quote_no, plan: r.plan, tier: r.tier, amount: r.amount, interval: r.interval });
       return r;
     },
@@ -229,6 +239,7 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
       const q = await rpc('a3_quote', { p_no: String(b.quote_no || '') });
       if (!q) throw new Oops('No quote has that number.', 404);
       if (q.status === 'paid' || q.status === 'cancelled') throw new Oops(`That quote is already ${q.status}.`);
+      if (q.interval !== 'free' && !(q.amount_cents >= 50)) throw new Oops('Set a price first (Edit), then send it.');
       const sel = A3.selection({ plan: q.plan, tier: q.tier, billing: q.interval === 'year' ? 'year' : 'month', os: q.config?.os, connection: q.config?.connection });
       const custom = { amount_cents: q.amount_cents, interval: q.interval, seats: q.seats, models: (q.items || []).map(i => i.model), chip: q.config?.chip, quote_no: q.quote_no };
       const customer = q.customer || {};
@@ -262,6 +273,40 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
       if (q.stripe_subscription_id) await call('DELETE', `subscriptions/${q.stripe_subscription_id}`).catch(() => {});
       const r = await rpc('a3_quote_save', { p: { quote_no: q.quote_no, status: 'cancelled' } });
       await log(who, 'quote_cancel', { quote_no: q.quote_no }); return r;
+    },
+
+    // ---------- behavior points. Managers give points to employees (the owner to anyone); nobody gives themselves points.
+    // Everyone sees their own; managers see the whole team.
+    async points(who, b) {
+      const monthStart = new Date(new Date().toLocaleString('en-US', { timeZone: TZ })); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+      const board = await rpc('a3_points_board', { p_month_start: monthStart.toISOString() });
+      const mine = board.find(r => r.user_id === who.id) || { total: 0, month: 0, given: 0, taken: 0 };
+      if (!who.manager || b.mine) return { mine, history: await rpc('a3_points', { p_user: who.id, p_limit: 100 }) };
+      const user = b.user_id ? String(b.user_id) : null;
+      return { mine, board, history: await rpc('a3_points', { p_user: user, p_limit: user ? 300 : 150 }), settings: (await rpc('a3_settings'))?.points || { late: 0 } };
+    },
+    async points_give(who, b) {
+      need(who, 'manager');
+      const user = String(b.user_id || ''), pts = Math.round(Number(b.points));
+      if (user === who.id) throw new Oops("You can't give yourself points.");
+      const board = await rpc('a3_points_board', { p_month_start: new Date().toISOString() });
+      const target = board.find(r => r.user_id === user);
+      if (!target) throw new Oops("That person isn't on the team.", 404);
+      if (!who.owner && target.role !== 'employee') throw new Oops('Only the owner can give managers points.', 403);
+      if (!Number.isFinite(pts) || pts === 0 || Math.abs(pts) > 50) throw new Oops('Points go from -50 to 50 (not 0).');
+      const r = await rpc('a3_points_give', { p_user: user, p_points: pts, p_reason: String(b.reason || '').slice(0, 200), p_kind: 'manual', p_by: who.name, p_by_id: who.id });
+      await log(who, 'points', { name: target.name, points: pts, reason: r.reason });
+      return r;
+    },
+    async points_undo(who, b) {
+      need(who, 'manager');
+      const list = await rpc('a3_points', { p_user: null, p_limit: 1000 });
+      const x = list.find(p => p.id === Number(b.id));
+      if (!x) throw new Oops('Not found.', 404);
+      if (!who.owner && x.given_by_id !== who.id) throw new Oops('Only the owner can undo points someone else gave.', 403);
+      const r = await rpc('a3_points_undo', { p_id: x.id, p_by: who.name });
+      await log(who, 'points_undo', { name: x.name, points: x.points, reason: x.reason });
+      return r;
     },
 
     // ---------- orders
@@ -332,6 +377,7 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
       if (key === 'store') value = { open: v.open !== false, message: String(v.message || '').slice(0, 200) };
       else if (key === 'business') value = { name: String(v.name || '').slice(0, 120), support_email: String(v.support_email || '').slice(0, 120), address: String(v.address || '').slice(0, 200), phone: String(v.phone || '').slice(0, 40) };
       else if (key === 'goals') value = { monthly_revenue: Math.max(0, Number(v.monthly_revenue) || 0) };
+      else if (key === 'points') value = { late: Math.max(-10, Math.min(0, Math.round(Number(v.late) || 0))) };
       else throw new Oops('Unknown setting.');
       const r = await rpc('a3_setting_set', { p_key: key, p_value: value, p_by: who.name });
       await log(who, 'settings', { key, ...value }); return r;
