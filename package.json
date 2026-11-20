@@ -1,7 +1,7 @@
 {
   "name": "aargon3",
   "productName": "aARgon3",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "aARgon3: the Apoji systems store for Nexus '28 (GitHub Pages) and the staff terminal for Mac and Windows.",
   "author": "Apoji Delegraphics",
   "license": "UNLICENSED",
@@ -24,7 +24,10 @@
     "productName": "aARgon3",
     "copyright": "© 2026 Apoji Delegraphics. All rights reserved.",
     "artifactName": "aARgon3-${version}-${arch}.${ext}",
-    "directories": { "output": "dist", "buildResources": "build" },
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
     "files": [
       "electron/**",
       "terminal/**",
@@ -37,20 +40,44 @@
       "category": "public.app-category.business",
       "icon": "build/icon.png",
       "identity": null,
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "dmg": {
       "title": "aARgon3 ${version}",
+      "background": "build/background.png",
       "iconSize": 112,
-      "window": { "width": 600, "height": 400 },
+      "iconTextSize": 13,
+      "window": {
+        "width": 660,
+        "height": 420
+      },
       "contents": [
-        { "x": 170, "y": 200, "type": "file" },
-        { "x": 430, "y": 200, "type": "link", "path": "/Applications" }
+        {
+          "x": 180,
+          "y": 215,
+          "type": "file"
+        },
+        {
+          "x": 480,
+          "y": 215,
+          "type": "link",
+          "path": "/Applications"
+        }
       ]
     },
     "win": {
-      "icon": "build/icon.png",
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "artifactName": "aARgon3-Setup-${version}.${ext}"
     },
     "nsis": {
@@ -60,8 +87,22 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "aARgon3",
-      "runAfterFinish": true
+      "runAfterFinish": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/uninstallerSidebar.bmp",
+      "installerHeader": "build/installerHeader.bmp",
+      "uninstallDisplayName": "aARgon3",
+      "deleteAppDataOnUninstall": false
     },
-    "publish": [{ "provider": "github", "owner": "apojidelegraphics", "repo": "aArgon3" }]
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "apojidelegraphics",
+        "repo": "aArgon3"
+      }
+    ]
   }
 }

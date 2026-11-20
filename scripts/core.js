@@ -55,9 +55,42 @@ function core(C) {
     for (let i = 0; i < 12; i++) s += ALPHABET[b[i] % 32];
     return s.slice(0, 8) + '-' + s.slice(8);
   }
+  // ---------- customer and company details (what the old aARgon3 asked for, per plan)
+  // Returns { first, last, name, email, phone, company, title, node, jurisdiction, billing_email } or throws a readable error.
+  function customer(plan, input = {}, { partial = false } = {}) {
+    const fields = C.fields[plan] || C.fields.personal, out = {};
+    for (const f of fields) {
+      let v = String(input[f.key] ?? '').trim().slice(0, f.key === 'company' ? 160 : 120);
+      if (f.type === 'email') v = v.toLowerCase();
+      if (!v && f.required && !partial) throw new Error(`${f.label} is required.`);
+      if (v && f.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw new Error(`${f.label} doesn't look right.`);
+      if (v && f.type === 'tel' && !/^[+()\d\s.-]{7,20}$/.test(v)) throw new Error(`${f.label} doesn't look like a phone number.`);
+      out[f.key] = v;
+    }
+    out.name = [out.first, out.last].filter(Boolean).join(' ');
+    return out;
+  }
+  // Omni-QNCN node IDs like the old terminal made: OS generation + three blocks, e.g. 28-12a3-45B6-78c9
+  function nodeId(os, rand = Math.random) {
+    const gen = /LentOS 27/.test(os || '') ? '27' : '28', d = () => Math.floor(rand() * 10);
+    const l = () => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'[Math.floor(rand() * 52)];
+    const part = () => `${d()}${d()}${l()}${d()}`;
+    return `${gen}-${part()}-${part()}-${part()}`;
+  }
+  function jurisdiction(region, rand = Math.random) {
+    const keys = Object.keys(C.regions), r = C.regions[region] ? region : keys[Math.floor(rand() * 4)];
+    return `${C.regions[r]}-${Math.floor(rand() * 1000)}`;
+  }
+  // a starting point for an Enterprise quote: per-person price × people, never under the minimum
+  function enterpriseSuggest(tier, seats, interval = 'month') {
+    const e = C.plans.enterprise, per = e.perSeatMonthly?.[tier] || 0, n = Math.max(Number(seats) || 0, e.seats.standard);
+    const monthly = Math.max(e.fromMonthly, Math.round(per * n));
+    return interval === 'year' ? monthly * C.yearlyMonths : monthly;
+  }
+
   const money = (n, cur = C.currency) => n == null ? '' : new Intl.NumberFormat('en-US', { style: 'currency', currency: cur.toUpperCase(), minimumFractionDigits: n % 1 ? 2 : 0 }).format(n);
 
-  return { C, TIERS, PLANS, price, selection, items, config, label, describe, orderId, money };
+  return { C, TIERS, PLANS, price, selection, items, config, label, describe, orderId, money, customer, nodeId, jurisdiction, enterpriseSuggest };
 }
 
 module.exports = { core };

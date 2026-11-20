@@ -76,3 +76,33 @@ label.lbl { display: block; font: 700 11px var(--mono); letter-spacing: .18em; t
 .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(var(--rgb), .25); border-top-color: var(--accent); animation: spin .8s linear infinite; display: inline-block; vertical-align: -3px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+/* the compare table (store Compare page + terminal Catalog) */
+.cmp-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); }
+.cmp { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 680px; }
+.cmp th, .cmp td { padding: 11px 14px; border-bottom: 1px solid rgba(var(--rgb), .07); text-align: left; vertical-align: top; }
+.cmp td { text-align: center; }
+.cmp thead th { position: sticky; top: 0; background: var(--panel2); font-size: 16px; z-index: 1; }
+.cmp thead th.pop { color: var(--accent); }
+.cmp th small, .cmp td small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.35; }
+.cmp tbody th { font-weight: 600; width: 26%; }
+.cmp .cmp-model { font: 600 13px var(--mono); padding-left: 26px; }
+.cmp .cmp-group th { background: rgba(var(--rgb), .06); font: 700 11px var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--accent); padding-top: 14px; }
+.cmp .cmp-group th small { font: 400 12.5px var(--sans); letter-spacing: 0; text-transform: none; color: var(--muted); }
+.cmp-yes { color: var(--mint); font-weight: 800; font-size: 16px; } .cmp-no { color: var(--muted); opacity: .6; }
+.cmp-part { color: var(--amber); font-size: 13px; font-weight: 600; }
+.cmp-small { min-width: 520px; } .cmp-small td { text-align: left; }
+.cmp-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.cmp-card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+.cmp-card b { display: block; margin-bottom: 6px; } .cmp-card .pill { margin-bottom: 6px; } .cmp-card p { margin: 0; color: var(--muted); font-size: 14px; }
+
+/* store and terminal forms: two columns of fields */
+.fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.fgrid .wide { grid-column: 1 / -1; }
+.fgen { display: flex; gap: 6px; } .fgen .field { flex: 1; min-width: 0; }
+.promo-row { display: flex; gap: 8px; } .promo-row .field { flex: 1; text-transform: uppercase; }
+.promo-ok { color: var(--mint); font-size: 14px; margin-top: 6px; }
+.closed { padding: 14px 18px; border-radius: 14px; border: 1px solid rgba(255,179,92,.45); background: rgba(255,179,92,.08); color: var(--amber); margin-bottom: 18px; font-weight: 600; }
+@media (max-width: 560px) { .fgrid { grid-template-columns: 1fr; } }
+.field.bad { border-color: var(--red); box-shadow: 0 0 0 3px rgba(255,107,122,.15); }
+.card .acts { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; }

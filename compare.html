@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#040b14">
+<title>Compare plans · aARgon3</title>
+<meta name="description" content="Everything in every aARgon3 plan: prices, people, models, Paragon, Quouk chips, LentOS and connections.">
+<link rel="icon" type="image/png" href="icons/favicon.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/site.css">
+<link rel="stylesheet" href="assets/store.css">
+<script src="assets/catalog.js"></script>
+<script src="assets/compare.js"></script>
+</head>
+<body>
+<div class="bgglow"></div>
+<nav>
+  <a class="brand" href="./"><img src="icons/icon-192.png" alt="">AARGON3</a>
+  <div class="links"><a href="./#plans">Plans</a><a href="./#faq">FAQ</a><a href="terms/">Terms</a><a class="keep btn primary small" href="./#plans">Choose a plan</a></div>
+</nav>
+<section style="padding-bottom:30px">
+  <div class="kicker">Compare</div>
+  <h2>Everything in every plan.</h2>
+  <p>The plan is how many people share one order. The tier is what everyone on it gets. Prices are per order, not per person.</p>
+  <div class="planbar"><div class="seg" id="billSeg"><button data-b="month" class="on">Monthly</button><button data-b="year">Yearly<span class="save">2 MONTHS FREE</span></button></div></div>
+</section>
+<section style="padding-top:0" id="table"></section>
+<section style="padding-top:20px"><div class="kicker">LentOS</div><h2>Your system's look</h2><p>Pick one when you order. It sets your theme and orb skin in Nexus '28 and never changes the price.</p><div id="os"></div></section>
+<section style="padding-top:20px"><div class="kicker">Connection</div><h2>How your Mac and phone talk</h2><p>Also picked when you order, and changeable later in Nexus '28.</p><div id="conn"></div></section>
+<section style="padding-top:20px"><div class="kicker">Quouk chips</div><h2>Agent power</h2><p>Your tier's chip sets how much an agent can do in one go. Your Mac's real chip and memory still decide which local models it can run.</p><div id="chips"></div></section>
+<section style="padding-top:20px"><div class="kicker">Plans</div><h2>People on one order</h2><p>The owner invites people from Nexus '28. Everyone on the order gets its models and perks.</p><div id="plans"></div></section>
+<section class="cta"><h2>Found your fit?</h2><a class="btn primary" href="./#plans">Choose a plan</a></section>
+<footer><span>aARgon3 by Apoji Delegraphics · © 2026 Apoji Delegraphics. All rights reserved.</span><span class="sp"></span><a href="./">Store</a><a href="terms/">Terms of Sale</a></footer>
+<script>
+(function () {
+  let billing = 'month';
+  function draw() {
+    const h = window.A3compare.html({ billing });
+    document.getElementById('table').innerHTML = h.table; document.getElementById('os').innerHTML = h.os;
+    document.getElementById('conn').innerHTML = h.connections; document.getElementById('chips').innerHTML = h.chips; document.getElementById('plans').innerHTML = h.plans;
+  }
+  document.querySelectorAll('#billSeg button').forEach(b => b.onclick = () => { billing = b.dataset.b; document.querySelectorAll('#billSeg button').forEach(x => x.classList.toggle('on', x === b)); draw(); });
+  draw();
+})();
+</script>
+</body>
+</html>

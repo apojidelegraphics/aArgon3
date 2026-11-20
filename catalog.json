@@ -1,30 +1,70 @@
 {
   "_note": "The one place prices, tiers and models live. After editing, run `npm run catalog` (the store, the terminal and the Supabase functions all read the generated copies).",
-  "version": "2.0",
+  "version": "2.1",
   "currency": "usd",
   "contactEmail": "apojidelegraphics101010@gmail.com",
   "yearlyMonths": 10,
-  "tierOrder": ["standard", "plus", "pro", "max"],
-  "planOrder": ["personal", "business", "enterprise"],
+  "tierOrder": [
+    "standard",
+    "plus",
+    "pro",
+    "max"
+  ],
+  "planOrder": [
+    "personal",
+    "business",
+    "enterprise"
+  ],
   "plans": {
     "personal": {
       "name": "Personal",
       "blurb": "For you. Pro and Max add a second person.",
-      "seats": { "standard": 1, "plus": 1, "pro": 2, "max": 2 },
-      "monthly": { "standard": 6, "plus": 12, "pro": 25, "max": 59 }
+      "seats": {
+        "standard": 1,
+        "plus": 1,
+        "pro": 2,
+        "max": 2
+      },
+      "monthly": {
+        "standard": 6,
+        "plus": 12,
+        "pro": 25,
+        "max": 59
+      }
     },
     "business": {
       "name": "Business",
       "blurb": "A small team on one order.",
-      "seats": { "standard": 5, "plus": 6, "pro": 7, "max": 7 },
-      "monthly": { "standard": 29, "plus": 59, "pro": 149, "max": 299 }
+      "seats": {
+        "standard": 5,
+        "plus": 6,
+        "pro": 7,
+        "max": 7
+      },
+      "monthly": {
+        "standard": 29,
+        "plus": 59,
+        "pro": 149,
+        "max": 299
+      }
     },
     "enterprise": {
       "name": "Enterprise",
-      "blurb": "100 people or more, paid by invoice.",
-      "seats": { "standard": 100, "plus": 150, "pro": 250, "max": null },
+      "blurb": "100 people or more, priced for your team and paid by invoice.",
+      "seats": {
+        "standard": 100,
+        "plus": 150,
+        "pro": 250,
+        "max": null
+      },
       "quote": true,
-      "fromMonthly": 499
+      "fromMonthly": 499,
+      "perSeatMonthly": {
+        "standard": 4,
+        "plus": 6,
+        "pro": 15,
+        "max": 30
+      }
     }
   },
   "tiers": {
@@ -32,48 +72,363 @@
       "name": "Standard",
       "chip": "Quouk .1o",
       "tagline": "Unlimited Lyte, every day.",
-      "families": ["lyte"],
-      "perks": ["Unlimited Lyte family", "Neodela and classic models: 40 chats", "Quouk .1o: 12 agent steps per task"]
+      "families": [
+        "lyte"
+      ],
+      "perks": [
+        "Unlimited Lyte family",
+        "Neodela and classic models: 40 chats",
+        "Quouk .1o: 12 agent steps per task"
+      ],
+      "limits": {
+        "Lyte": "Unlimited",
+        "Neodela and classic": "40 chats",
+        "Paragon": "Your own key",
+        "Axiom bonus": "—"
+      },
+      "extras": {
+        "Early features": "Stable",
+        "Support priority": "Normal",
+        "Phone answers": "Normal queue"
+      }
     },
     "plus": {
       "name": "Plus",
       "chip": "Quouk .1o",
       "tagline": "More Neodela and early features.",
-      "families": ["lyte"],
-      "perks": ["Unlimited Lyte family", "Neodela and classic models: 60 chats", "Request any beta feature", "+15 Axiom minutes a week (select people)"]
+      "families": [
+        "lyte"
+      ],
+      "perks": [
+        "Unlimited Lyte family",
+        "Neodela and classic models: 60 chats",
+        "Request any beta feature",
+        "+15 Axiom minutes a week (select people)"
+      ],
+      "limits": {
+        "Lyte": "Unlimited",
+        "Neodela and classic": "60 chats",
+        "Paragon": "Your own key",
+        "Axiom bonus": "+15 min a week"
+      },
+      "extras": {
+        "Early features": "Request any beta",
+        "Support priority": "Normal",
+        "Phone answers": "Normal queue"
+      }
     },
     "pro": {
       "name": "Pro",
       "chip": "Quouk .2o",
       "tagline": "Every model unlimited, plus Paragon.",
       "popular": true,
-      "families": ["lyte", "best"],
-      "perks": ["Every model unlimited", "Paragon: 10 a day", "Quouk .2o: 16 agent steps, 5 Swarm workers", "Beta features on, High priority support"]
+      "families": [
+        "lyte",
+        "best"
+      ],
+      "perks": [
+        "Every model unlimited",
+        "Paragon: 10 a day",
+        "Quouk .2o: 16 agent steps, 5 Swarm workers",
+        "Beta features on, High priority support"
+      ],
+      "limits": {
+        "Lyte": "Unlimited",
+        "Neodela and classic": "Unlimited",
+        "Paragon": "10 a day",
+        "Axiom bonus": "+30 min a week"
+      },
+      "extras": {
+        "Early features": "Betas on",
+        "Support priority": "High",
+        "Phone answers": "Ahead of routines"
+      }
     },
     "max": {
       "name": "Max",
       "chip": "Quouk .3o",
       "tagline": "Everything, at full power.",
-      "families": ["lyte", "best"],
-      "perks": ["Every model unlimited", "Paragon: 25 a day", "Quouk .3o: 24 agent steps, 6 Swarm workers", "Betas and previews, Urgent support", "+90 Axiom minutes a week (select people)"]
+      "families": [
+        "lyte",
+        "best"
+      ],
+      "perks": [
+        "Every model unlimited",
+        "Paragon: 25 a day",
+        "Quouk .3o: 24 agent steps, 6 Swarm workers",
+        "Betas and previews, Urgent support",
+        "+90 Axiom minutes a week (select people)"
+      ],
+      "limits": {
+        "Lyte": "Unlimited",
+        "Neodela and classic": "Unlimited",
+        "Paragon": "25 a day",
+        "Axiom bonus": "+90 min a week"
+      },
+      "extras": {
+        "Early features": "Betas + previews",
+        "Support priority": "Urgent",
+        "Phone answers": "Ahead of everything"
+      }
     }
   },
   "families": {
-    "base": { "name": "Base", "free": true, "models": ["Flash"], "about": "Quick answers. Free and unlimited for everyone in Nexus '28." },
-    "lyte": { "name": "Lyte", "models": ["Lyte-28", "Lyte-27", "Lyte-2.6"], "about": "The everyday crew: fast, sharp and good at almost anything." },
-    "best": { "name": "Neodela and classic", "models": ["Neodela", "Denali", "Sonoma", "Armerad", "Hailos-9.2o", "Hailos-9.2", "Myst", "Dahrk"], "about": "The flagship Neodela plus the classic Nexus models, each with its own personality." }
+    "base": {
+      "name": "Base",
+      "free": true,
+      "models": [
+        "Flash"
+      ],
+      "about": "Quick answers. Free and unlimited for everyone in Nexus '28."
+    },
+    "lyte": {
+      "name": "Lyte",
+      "models": [
+        "Lyte-28",
+        "Lyte-27",
+        "Lyte-2.6"
+      ],
+      "about": "The everyday crew: fast, sharp and good at almost anything."
+    },
+    "best": {
+      "name": "Neodela and classic",
+      "models": [
+        "Neodela",
+        "Denali",
+        "Sonoma",
+        "Armerad",
+        "Hailos-9.2o",
+        "Hailos-9.2",
+        "Myst",
+        "Dahrk"
+      ],
+      "about": "The flagship Neodela plus the classic Nexus models, each with its own personality."
+    }
   },
   "os": [
-    { "id": "LentOS 28.1 Horizon", "family": "Horizon", "about": "Newest. Horizon theme and orb skin, plus everything Sonoma has." },
-    { "id": "LentOS 28 Horizon", "family": "Horizon", "about": "Horizon theme and orb skin." },
-    { "id": "LentOS 27.2 Sonoma", "family": "Sonoma", "about": "Sonoma theme (warm sand and dusk) and orb skin." },
-    { "id": "LentOS 27.1 Sonoma", "family": "Sonoma", "about": "Sonoma theme and orb skin." },
-    { "id": "LentOS 27 Sonoma", "family": "Sonoma", "about": "Sonoma theme and orb skin." },
-    { "id": "LentOS 27", "family": "Sonoma", "about": "The original. Sonoma theme and orb skin." }
+    {
+      "id": "LentOS 28.1 Horizon",
+      "family": "Horizon",
+      "about": "Newest. Horizon theme and orb skin, plus everything Sonoma has."
+    },
+    {
+      "id": "LentOS 28 Horizon",
+      "family": "Horizon",
+      "about": "Horizon theme and orb skin."
+    },
+    {
+      "id": "LentOS 27.2 Sonoma",
+      "family": "Sonoma",
+      "about": "Sonoma theme (warm sand and dusk) and orb skin."
+    },
+    {
+      "id": "LentOS 27.1 Sonoma",
+      "family": "Sonoma",
+      "about": "Sonoma theme and orb skin."
+    },
+    {
+      "id": "LentOS 27 Sonoma",
+      "family": "Sonoma",
+      "about": "Sonoma theme and orb skin."
+    },
+    {
+      "id": "LentOS 27",
+      "family": "Sonoma",
+      "about": "The original. Sonoma theme and orb skin."
+    }
   ],
   "connections": [
-    { "id": "Apoji Cloud", "about": "Works anywhere with no setup. Chats sync through the cloud." },
-    { "id": "HLS (Home Lentintity Server)", "about": "Your phone talks straight to your Mac first, with the cloud as backup." },
-    { "id": "Local / Private Secure Gateway", "about": "Never through the cloud. Every chat stays on your Mac." }
-  ]
+    {
+      "id": "Apoji Cloud",
+      "about": "Works anywhere with no setup. Chats sync through the cloud."
+    },
+    {
+      "id": "HLS (Home Lentintity Server)",
+      "about": "Your phone talks straight to your Mac first, with the cloud as backup."
+    },
+    {
+      "id": "Local / Private Secure Gateway",
+      "about": "Never through the cloud. Every chat stays on your Mac."
+    }
+  ],
+  "chips": [
+    {
+      "id": "No order",
+      "steps": 8,
+      "swarm": 4,
+      "ops": 1,
+      "about": "What everyone gets in Nexus '28."
+    },
+    {
+      "id": "Quouk .1o",
+      "steps": 12,
+      "swarm": 4,
+      "ops": 1,
+      "about": "A little more room for agents to work."
+    },
+    {
+      "id": "Quouk .2o",
+      "steps": 16,
+      "swarm": 5,
+      "ops": 2,
+      "about": "Longer agent tasks and a bigger Swarm."
+    },
+    {
+      "id": "Quouk .3o",
+      "steps": 24,
+      "swarm": 6,
+      "ops": 3,
+      "about": "The most agent power in one go."
+    }
+  ],
+  "regions": {
+    "A": "Neo-Silicon Core",
+    "B": "East Coast Grid",
+    "C": "Central Grid",
+    "D": "Off-Grid / International",
+    "E": "Apoji Corporate"
+  },
+  "fields": {
+    "personal": [
+      {
+        "key": "first",
+        "label": "First name",
+        "required": true,
+        "type": "text",
+        "placeholder": "Jordan"
+      },
+      {
+        "key": "last",
+        "label": "Last name",
+        "required": true,
+        "type": "text",
+        "placeholder": "Rivera"
+      },
+      {
+        "key": "email",
+        "label": "Email",
+        "required": true,
+        "type": "email",
+        "placeholder": "you@example.com"
+      },
+      {
+        "key": "phone",
+        "label": "Phone",
+        "required": false,
+        "type": "tel",
+        "placeholder": "Optional"
+      }
+    ],
+    "business": [
+      {
+        "key": "first",
+        "label": "First name",
+        "required": true,
+        "type": "text",
+        "placeholder": ""
+      },
+      {
+        "key": "last",
+        "label": "Last name",
+        "required": true,
+        "type": "text",
+        "placeholder": ""
+      },
+      {
+        "key": "email",
+        "label": "Work email",
+        "required": true,
+        "type": "email",
+        "placeholder": "you@company.com"
+      },
+      {
+        "key": "phone",
+        "label": "Phone",
+        "required": false,
+        "type": "tel",
+        "placeholder": "Optional"
+      },
+      {
+        "key": "company",
+        "label": "Registered business name",
+        "required": true,
+        "type": "text",
+        "placeholder": "Business name"
+      },
+      {
+        "key": "title",
+        "label": "Your role",
+        "required": false,
+        "type": "text",
+        "placeholder": "e.g. Owner, IT lead"
+      }
+    ],
+    "enterprise": [
+      {
+        "key": "first",
+        "label": "Lead operator first name",
+        "required": true,
+        "type": "text",
+        "placeholder": ""
+      },
+      {
+        "key": "last",
+        "label": "Lead operator last name",
+        "required": true,
+        "type": "text",
+        "placeholder": ""
+      },
+      {
+        "key": "email",
+        "label": "Work email",
+        "required": true,
+        "type": "email",
+        "placeholder": "you@company.com"
+      },
+      {
+        "key": "phone",
+        "label": "Phone",
+        "required": true,
+        "type": "tel",
+        "placeholder": ""
+      },
+      {
+        "key": "company",
+        "label": "Corporate entity name",
+        "required": true,
+        "type": "text",
+        "placeholder": "Company, Inc."
+      },
+      {
+        "key": "title",
+        "label": "Your role",
+        "required": false,
+        "type": "text",
+        "placeholder": ""
+      },
+      {
+        "key": "node",
+        "label": "Omni-QNCN node allocation ID",
+        "required": true,
+        "type": "text",
+        "placeholder": "28-12a3-45b6-78c9",
+        "generate": "node"
+      },
+      {
+        "key": "jurisdiction",
+        "label": "Target deployment jurisdiction",
+        "required": true,
+        "type": "text",
+        "placeholder": "East Coast Grid-482",
+        "generate": "jurisdiction"
+      },
+      {
+        "key": "billing_email",
+        "label": "Billing email (for invoices)",
+        "required": false,
+        "type": "email",
+        "placeholder": "Optional"
+      }
+    ]
+  }
 }

@@ -84,7 +84,9 @@ function menu() {
     ...(MAC ? [{ label: 'aARgon3', submenu: [{ role: 'about' }, { label: 'Check for Updates…', click: () => checkUpdates(true) }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { type: 'separator' }, { role: 'quit' }] }] : []),
     { label: 'Terminal', submenu: [
       { label: 'Today', accelerator: `${cmd}+1`, click: page('today') }, { label: 'New Sale', accelerator: `${cmd}+N`, click: page('sale') },
-      { label: 'Orders', accelerator: `${cmd}+F`, click: page('orders') }, { label: 'Timesheet', accelerator: `${cmd}+T`, click: page('time') },
+      { label: 'Orders', accelerator: `${cmd}+F`, click: page('orders') }, { label: 'Catalog', click: page('catalog') },
+      { label: 'Schedule', click: page('schedule') }, { label: 'Timesheet', accelerator: `${cmd}+T`, click: page('time') }, { label: 'Sales', click: page('sales') },
+      { label: 'Profile', accelerator: `${cmd}+,`, click: page('profile') },
       { type: 'separator' }, { label: 'Sign Out', click: page('signout') }, ...(MAC ? [] : [{ type: 'separator' }, { label: 'Check for Updates…', click: () => checkUpdates(true) }, { role: 'quit' }])] },
     { role: 'editMenu' },
     { label: 'View', submenu: [{ role: 'reload' }, { role: 'togglefullscreen' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, ...(app.isPackaged ? [] : [{ role: 'toggleDevTools' }])] },

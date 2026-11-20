@@ -1,11 +1,12 @@
 // POST /functions/v1/stripe-webhook — Stripe tells us about payments and subscriptions.
 // In Stripe: Developers → Webhooks → Add endpoint → this URL, with these events:
-//   checkout.session.completed, checkout.session.async_payment_succeeded, customer.subscription.updated, customer.subscription.deleted
+//   checkout.session.completed, checkout.session.async_payment_succeeded, customer.subscription.updated, customer.subscription.deleted,
+//   invoice.paid (2.1: invoiced quotes and renewals)
 // Needs secrets STRIPE_WEBHOOK_SECRET (whsec_…) and STRIPE_SECRET_KEY.
-import { json, Oops, db, verifyStripeSignature, fulfill } from '../_shared/lib.mjs';
+import { json, Oops, db, stripe, verifyStripeSignature, fulfill, invoicePaid } from '../_shared/lib.mjs';
 
 export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
-  const rpc = db(env, fetchImpl);
+  const rpc = db(env, fetchImpl), call = stripe(env, fetchImpl);
   return async function (req) {
     if (req.method !== 'POST') return json({ error: 'Use POST.' }, 405);
     let event;
@@ -19,6 +20,8 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
           if ((o.metadata || {}).a3_plan) { const r = await fulfill({ rpc, session: o }); return json({ received: true, order: r?.order_id || null }); }
           return json({ received: true, ignored: 'not an aARgon3 checkout' });
         }
+        case 'invoice.paid':
+          return json({ received: true, ...(await invoicePaid({ rpc, call, invoice: o })) });
         case 'customer.subscription.deleted':
           await rpc('a3_set_status', { p_order: null, p_subscription: o.id, p_status: 'CANCELLED' });
           return json({ received: true });

@@ -2,46 +2,45 @@
 
 The Apoji systems store for Nexus '28, and the staff terminal that sells it.
 
-- **Store** (public, GitHub Pages): https://apojidelegraphics.github.io/aArgon3/ — plans, models, Stripe checkout, order number.
+- **Store** (public, GitHub Pages): https://apojidelegraphics.github.io/aArgon3/ — plans, compare page, company details, promo codes, Stripe checkout, order number.
 - **Terminal** (staff only): https://apojidelegraphics.github.io/aArgon3/terminal/ and the **aARgon3** desktop app for Mac and Windows
-  ([Releases](https://github.com/apojidelegraphics/aArgon3/releases/latest)). Sign in with a Nexus admin account.
+  ([Releases](https://github.com/apojidelegraphics/aArgon3/releases/latest)). Sign in with your Nexus account.
 
 ## What's where
 
 | Path | What |
 |---|---|
-| `index.html`, `success.html`, `terms/` | The store, the thank-you page (shows the order number), Terms of Sale |
-| `terminal/` | The staff terminal: clock in/out, breaks, new sale (QR code / payment link), orders, timesheets, activity |
-| `electron/` | The desktop app (loads `terminal/` from inside the app) |
-| `catalog.json` | **Prices, tiers, models, LentOS and connections.** Edit, then `npm run catalog` |
-| `supabase/aargon3-2.0.sql` | Database: locks the tables down, Stripe columns, stores, the new clock, server functions |
-| `supabase/functions/` | Edge Functions: `checkout` (store), `stripe-webhook` (Stripe), `staff` (terminal) |
-| `supabase/wipe.sql` | Clears all sales data before launch (no undo) |
+| `index.html`, `compare.html`, `success.html`, `terms/` | The store, everything-in-every-plan, the thank-you page (order number), Terms of Sale |
+| `terminal/` | The staff terminal: clock, sales, orders, catalog, schedule, timesheets, sales reports, profile, custom orders, promotions, team, activity, settings |
+| `electron/`, `build/` | The desktop app (loads `terminal/` from inside the app) and its icon, DMG background and Windows installer art |
+| `catalog.json` | **Prices, tiers, models, chips, LentOS, connections and the customer fields per plan.** Edit, then `npm run catalog` |
+| `supabase/aargon3-2.0.sql`, `aargon3-2.1.sql` | Database: lockdown, orders, stores, clock (2.0); staff roles, schedule, time off, quotes, payments, promotions, settings (2.1) |
+| `supabase/functions/` | Edge Functions: `checkout` (store), `stripe-webhook` (Stripe), `staff` (terminal and Apoji Admin) |
+| `supabase/wipe.sql` | Clears all sales data at launch (no undo) |
 
 ## Who can do what
 
-The repo is public, so nothing secret lives here. The pages only hold public keys. Everything that matters is checked on the server:
+Staff sign in with their Nexus account. The `staff` function checks every request:
 
-- **Customers** can only start a Stripe Checkout. The price is worked out again on the server from `catalog.json`.
-- **Orders** are only written after Stripe confirms payment (webhook, or the thank-you page asking Stripe directly).
-- **Staff**: the `staff` function checks every request's Nexus sign-in against Nexus's `admin_roles`. Any admin level can clock in and sell.
-  **high-admin** accounts are managers: everyone's timesheets, fixing shifts, free (comp) orders, cancel and refund, activity log.
-- **Nexus '28** can still look up an order by number (5 columns: number, plan, status, system, models), never customer details.
+| Role | Who | Can |
+|---|---|---|
+| Employee | Nexus admins (not high-admin), or anyone a manager adds by email | Clock in/out and breaks, sell, look up orders, see the catalog and the schedule, their own timesheet and sales, ask for time off, edit their profile |
+| Manager | Nexus high-admins, or anyone the owner makes a manager | All of that, plus: everyone's timesheets and sales, fixing shifts, scheduling, time-off answers, custom orders and Enterprise quotes, invoices, comps, cancels and refunds, promo codes, adding employees, the activity log |
+| Owner | apojidelegraphics101010@gmail.com (set in `supabase/functions/staff/handler.mjs`) | Everything, plus: roles, pay rates (and pay estimates on timesheets), switching people off, store open/closed, business details, sales goal, stores |
 
-## Setup
+The repo is public, so nothing secret lives here: the pages only hold public keys, prices are worked out again on the server, and orders are only written once Stripe says they're paid.
 
-1. **Database**: Supabase → aARgon3 & Mexel Backend → SQL Editor → run `supabase/aargon3-2.0.sql`.
-2. **Secrets**: Supabase → Edge Functions → Secrets: `STRIPE_SECRET_KEY` (`sk_test_…` while testing), `STRIPE_WEBHOOK_SECRET` (step 4),
-   `SITE_URL` = `https://apojidelegraphics.github.io/aArgon3`.
-3. **Functions**: deploy `checkout`, `stripe-webhook` and `staff` with **verify JWT off** (`supabase/config.toml` has this), e.g.
-   `npx supabase functions deploy --project-ref yuergfrpfhtcxjkcgjrx`.
-4. **Stripe webhook**: Stripe → Developers → Webhooks → Add endpoint
-   `https://yuergfrpfhtcxjkcgjrx.supabase.co/functions/v1/stripe-webhook`, events `checkout.session.completed`,
-   `checkout.session.async_payment_succeeded`, `customer.subscription.updated`, `customer.subscription.deleted`. Copy its signing secret into step 2.
+## Setup / updating
+
+1. **Database**: Supabase → aARgon3 & Mexel Backend → SQL Editor → run `supabase/aargon3-2.0.sql` (once), then `supabase/aargon3-2.1.sql`.
+2. **Functions**: from this folder, `npx supabase functions deploy checkout stripe-webhook staff --project-ref yuergfrpfhtcxjkcgjrx --no-verify-jwt --use-api`.
+3. **Secrets** (Supabase → Edge Functions → Secrets): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SITE_URL` = `https://apojidelegraphics.github.io/aArgon3`.
+4. **Stripe webhook** → `https://yuergfrpfhtcxjkcgjrx.supabase.co/functions/v1/stripe-webhook`, Snapshot payloads, events:
+   `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`.
 5. **Pages**: GitHub → Settings → Pages → Deploy from a branch → `main` / root.
 6. Optional: Stripe → Settings → Billing → Customer portal → copy the login link into `assets/config.js` (`portalUrl`).
 
-Test with card `4242 4242 4242 4242`, any future date, any CVC.
+Test with card `4242 4242 4242 4242`, any future date, any CVC. In the sandbox Stripe only emails invoices to your own team's addresses.
 
 ## Develop
 
@@ -52,6 +51,6 @@ npm run site       # the website at http://localhost:8028
 npm test           # A3_PG="-h /tmp -p 5432 -U postgres" npm test also runs the SQL against a scratch Postgres
 ```
 
-Releasing the desktop app: push a tag like `v2.0.0`. GitHub Actions builds the Mac DMGs and Windows installer and publishes a release.
+Releasing the desktop app: push a tag like `v2.1.0`. GitHub Actions builds the Mac DMGs and the Windows installer and publishes a release.
 
 © 2026 Apoji Delegraphics. All rights reserved.
