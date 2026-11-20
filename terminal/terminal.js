@@ -98,6 +98,8 @@
   const shift = () => S.state?.shift || null;
   const workedNow = () => { const s = shift(); if (!s) return 0; return s.minutes + (s.on_break ? 0 : (Date.now() - S.fetchedAt) / 60e3); };
   const breakNow = () => { const s = shift(); const b = s?.breaks?.find(x => !x.end); return b ? (Date.now() - new Date(b.start)) / 60e3 : 0; };
+  const free = () => !!S.me?.owner;   // the owner never has to clock in (but can, and can be scheduled)
+  const myStore = () => shift()?.store_code || S.me?.default_store || S.state?.last_store;
   const can = role => ({ employee: 1, manager: 2, owner: 3 }[S.me?.role] || 1) >= ({ employee: 1, manager: 2, owner: 3 }[role]);
 
   // ================================================================ sign in
@@ -127,7 +129,7 @@
 
   // ================================================================ shell
   const PAGES = [
-    { id: 'today', icon: 'today', label: 'Today', group: '' }, { id: 'sale', icon: 'sale', label: 'New sale', group: '' },
+    { id: 'today', icon: 'today', label: 'Today', group: '' }, { id: 'sale', icon: 'sale', label: 'New sale', short: 'Sell', group: '' },
     { id: 'orders', icon: 'orders', label: 'Orders', group: '' }, { id: 'catalog', icon: 'catalog', label: 'Catalog', group: '' },
     { id: 'schedule', icon: 'schedule', label: 'Schedule', group: 'YOUR WORK' }, { id: 'time', icon: 'time', label: 'Timesheet', group: 'YOUR WORK' },
     { id: 'sales', icon: 'sales', label: 'Sales', group: 'YOUR WORK', label2: 'My sales' }, { id: 'profile', icon: 'profile', label: 'Profile', group: 'YOUR WORK' },
@@ -142,9 +144,30 @@
         ${visible().map((p, i) => { const g = p.group !== last ? (last = p.group, p.group ? `<div class="sect">${p.group}</div>` : '') : '';
           return `${g}<button class="nav" data-p="${p.id}" title="${esc(p.label)}">${ic(p.icon)}<span class="lbl">${esc(p.id === 'sales' && !can('manager') ? p.label2 : p.label)}</span><span class="badge" data-badge="${p.id}" hidden></span>${i < 9 ? `<kbd>${MOD}${i + 1}</kbd>` : ''}</button>`; }).join('')}
         <div class="sp"></div><div class="me" id="me"></div></aside>
-      <main class="main"><header class="top"><h2 id="title"></h2><span class="sp"></span><div class="clock" id="clock"></div></header><div id="page"></div></main></div>`;
-    document.querySelectorAll('.nav').forEach(b => b.onclick = () => go(b.dataset.p));
+      <main class="main"><header class="top"><img class="mlogo" src="../icons/icon-192.png" alt=""><h2 id="title"></h2><span class="sp"></span><div class="clock" id="clock"></div></header><div id="page"></div></main>
+      <nav class="tabs">${TABS.map(id => { const p = PAGES.find(x => x.id === id); return `<button class="tab" data-p="${id}">${ic(p.icon, 20)}<span>${esc(p.short || p.label)}</span></button>`; }).join('')}
+        <button class="tab" id="more">${ic('menu', 20)}<span>More</span><span class="badge" data-badge="more" hidden></span></button></nav></div>`;
+    document.querySelectorAll('.nav, .tab[data-p]').forEach(b => b.onclick = () => go(b.dataset.p));
+    $('more').onclick = moreSheet;
+    new MutationObserver(() => labelTables($('page'))).observe($('page'), { childList: true, subtree: true });
     paintMe(); paintClock(); paintBadges();
+  }
+  // phones: a bottom tab bar with the everyday pages; everything else is under More
+  const TABS = ['today', 'sale', 'orders', 'schedule'];
+  function moreSheet() {
+    let last = null;
+    sheet(`<div class="more-head">${avatar(S.me.name, S.me.color)}<div><b>${esc(S.me.name)}</b><small>${S.me.owner ? 'Owner' : roleName(S.me.role)} · ${esc(S.me.email || '')}</small></div></div>
+      ${visible().filter(p => !TABS.includes(p.id)).map(p => { const g = p.group !== last ? (last = p.group, `${p.group ? `<div class="sect">${p.group}</div>` : ''}`) : '';
+        return `${g}<button class="nav ${S.page === p.id ? 'on' : ''}" data-p="${p.id}">${ic(p.icon)}<span class="lbl">${esc(p.id === 'sales' && !can('manager') ? p.label2 : p.label)}</span></button>`; }).join('')}
+      <button class="nav" id="mso">${ic('power')}<span class="lbl">Sign out</span></button>`,
+      (el, close) => { el.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { close(); go(b.dataset.p); }); el.querySelector('#mso').onclick = () => { close(); signOut(); }; }, 'more-sheet');
+  }
+  // tables become stacked cards on phones; each cell is labelled with its column name
+  function labelTables(root) {
+    root?.querySelectorAll('table.tbl').forEach(t => {
+      const hs = [...t.querySelectorAll('thead th')].map(th => th.textContent.trim());
+      t.querySelectorAll('tbody tr').forEach(tr => { let i = 0; for (const td of tr.children) { if (!td.hasAttribute('data-label')) td.setAttribute('data-label', td.colSpan > 1 ? '' : hs[i] || ''); i += td.colSpan || 1; } });
+    });
   }
   function paintMe() {
     if (!$('me') || !S.me) return;
@@ -154,12 +177,14 @@
   }
   function paintBadges() {
     const b = document.querySelector('[data-badge="schedule"]');
-    if (b) { const n = can('manager') ? S.state?.pending_time_off || 0 : 0; b.hidden = !n; b.textContent = n; }
+    const n = can('manager') ? S.state?.pending_time_off || 0 : 0;
+    document.querySelectorAll('[data-badge="schedule"], [data-badge="more"]').forEach(x => { x.hidden = !n; x.textContent = n; });
   }
   function go(page) {
     const p = visible().find(x => x.id === page) || PAGES[0];
     S.page = p.id; if (location.hash !== '#' + p.id) history.replaceState(null, '', '#' + p.id);
-    document.querySelectorAll('.nav').forEach(b => b.classList.toggle('on', b.dataset.p === p.id));
+    document.querySelectorAll('.nav, .tab[data-p]').forEach(b => b.classList.toggle('on', b.dataset.p === p.id));
+    $('more')?.classList.toggle('on', !TABS.includes(p.id));
     $('title').textContent = p.id === 'sales' && !can('manager') ? p.label2 : p.label;
     $('page').innerHTML = '<div class="wrap" id="pg"></div>'; $('page').scrollTop = 0;
     ({ today: pageToday, sale: pageSale, orders: pageOrders, catalog: pageCatalog, schedule: pageSchedule, time: pageTime, sales: pageSales, profile: pageProfile,
@@ -170,18 +195,22 @@
   function paintClock() {
     const el = $('clock'); if (!el) return;
     const s = shift();
-    if (!s) {
+    if (!s && free()) {
+      el.className = 'clock owner';
+      el.innerHTML = `<span class="dot"></span><div class="what" title="The owner doesn't need to clock in"><span class="l">OWNER<span class="hide-sm"> · NO CLOCK NEEDED</span></span><b>${hm(S.state?.week_minutes || 0)} <small>this week</small></b></div><button class="btn quiet small" id="cin" title="Optional: log hours for a scheduled shift">${ic('login', 15)} <span class="hide-sm">Clock in</span></button>`;
+      $('cin').onclick = () => clockInSheet();
+    } else if (!s) {
       el.className = 'clock';
-      el.innerHTML = `<span class="dot"></span><div class="what" title="Your hours this week">OFF THE CLOCK<b>${hm(S.state?.week_minutes || 0)}</b></div><button class="btn primary small" id="cin">${ic('login', 15)} Clock in</button>`;
+      el.innerHTML = `<span class="dot"></span><div class="what" title="Your hours this week"><span class="l">OFF THE CLOCK</span><b>${hm(S.state?.week_minutes || 0)}</b></div><button class="btn primary small" id="cin">${ic('login', 15)} <span class="hide-sm">Clock in</span></button>`;
       $('cin').onclick = () => clockInSheet();
     } else if (s.on_break) {
       el.className = 'clock brk';
-      el.innerHTML = `<span class="dot"></span><div class="what">ON BREAK<b id="tick">${clockText(breakNow())}</b></div><button class="btn primary small" id="bk">End break</button>`;
+      el.innerHTML = `<span class="dot"></span><div class="what"><span class="l">ON BREAK</span><b id="tick">${clockText(breakNow())}</b></div><button class="btn primary small" id="bk">End break</button>`;
       $('bk').onclick = e => doBreak(false, e.target);
     } else {
       el.className = 'clock on';
-      el.innerHTML = `<span class="dot"></span><div class="what" title="${esc(s.store)}">ON THE CLOCK · #${esc(s.store_code)}${s.late_minutes ? ` · <span style="color:var(--amber)">${s.late_minutes}m late</span>` : ''}<b id="tick">${clockText(workedNow())}</b></div>
-        <button class="btn small" id="bk">${ic('coffee', 15)} Break</button><button class="btn small danger" id="cout">${ic('logout', 15)} Clock out</button>`;
+      el.innerHTML = `<span class="dot"></span><div class="what" title="${esc(s.store)}"><span class="l">ON THE CLOCK · #${esc(s.store_code)}${s.late_minutes ? ` · <span style="color:var(--amber)">${s.late_minutes}m late</span>` : ''}</span><b id="tick">${clockText(workedNow())}</b></div>
+        <button class="btn small" id="bk">${ic('coffee', 15)} <span class="hide-sm">Break</span></button><button class="btn small danger" id="cout">${ic('logout', 15)} <span class="hide-sm">Clock out</span></button>`;
       $('bk').onclick = e => doBreak(true, e.target);
       $('cout').onclick = () => clockOutSheet();
     }
@@ -230,17 +259,19 @@
       ${long ? `<div class="banner"><div><b>Forgot to clock out?</b> You've been clocked in since ${fmtWhen(s.clock_in)}.</div>
         <span style="flex:1"></span><span class="muted">I left at</span><input class="field" type="datetime-local" id="leftAt" value="${localInput(Math.min(Date.now(), new Date(s.clock_in).getTime() + 8 * 3600e3))}">
         <button class="btn small" id="fix">Clock out at that time</button></div>` : ''}
-      ${!s ? gate('Clock in to start selling', `Hi ${S.me.name}. You've worked ${hm(S.state?.week_minutes || 0)} this week.${n ? ` Next shift: ${fmtDay(n.starts_at)} ${fmtTime(n.starts_at)}–${fmtTime(n.ends_at)}.` : ''}`) : ''}
+      ${!s && !free() ? gate('Clock in to start selling', `Hi ${S.me.name}. You've worked ${hm(S.state?.week_minutes || 0)} this week.${n ? ` Next shift: ${fmtDay(n.starts_at)} ${fmtTime(n.starts_at)}–${fmtTime(n.ends_at)}.` : ''}`) : ''}
       <div class="stats">
         <div class="card stat"><div class="k">Sales today</div><div class="v">${money(Number(o.today?.revenue) || 0)}</div><div class="s">${o.today?.orders || 0} order${o.today?.orders === 1 ? '' : 's'}</div></div>
         <div class="card stat"><div class="k">Active subscriptions</div><div class="v">${o.active_subscriptions || 0}</div><div class="s">paying through Stripe</div></div>
-        <div class="card stat"><div class="k">This shift</div><div class="v">${s ? hm(workedNow()) : '—'}</div><div class="s">${s ? `${s.orders} sale${s.orders === 1 ? '' : 's'} · ${money(Number(s.sales) || 0)}` : 'not clocked in'}</div></div>
-        <div class="card stat"><div class="k">Your week</div><div class="v">${hm((S.state?.week_minutes || 0) + (s && !s.on_break ? (Date.now() - S.fetchedAt) / 60e3 : 0))}</div><div class="s">since Monday</div></div>
+        ${s || !free() ? `<div class="card stat"><div class="k">This shift</div><div class="v">${s ? hm(workedNow()) : '—'}</div><div class="s">${s ? `${s.orders} sale${s.orders === 1 ? '' : 's'} · ${money(Number(s.sales) || 0)}` : 'not clocked in'}</div></div>`
+          : `<div class="card stat"><div class="k">On the clock</div><div class="v">${(o.on_clock || []).length}</div><div class="s">${(o.on_clock || []).length === 1 ? 'person' : 'people'} working now</div></div>`}
+        ${free() && !s ? `<div class="card stat"><div class="k">Last 7 days</div><div class="v">${money(week.reduce((m, d) => m + (Number(d.revenue) || 0), 0))}</div><div class="s">${week.reduce((m, d) => m + (Number(d.orders) || 0), 0)} orders</div></div>`
+          : `<div class="card stat"><div class="k">Your week</div><div class="v">${hm((S.state?.week_minutes || 0) + (s && !s.on_break ? (Date.now() - S.fetchedAt) / 60e3 : 0))}</div><div class="s">since Monday</div></div>`}
       </div>
       <div class="cols">
         <div class="card"><h3>Last 7 days<small>sales</small></h3><div class="bars">${week.map((d, i) => `<div class="b ${i === week.length - 1 ? 'today' : ''}" title="${esc(d.day)}: ${d.orders} orders"><span class="amt">${Number(d.revenue) ? big(d.revenue) : ''}</span><div class="bar" style="height:${Math.round((Number(d.revenue) || 0) / max * 130)}px"></div><span class="lab">${new Date(d.day + 'T12:00').toLocaleDateString([], { weekday: 'short' })}</span></div>`).join('')}</div></div>
         <div class="card"><h3>On the clock now<small>${(o.on_clock || []).length}</small></h3><div class="people">${(o.on_clock || []).map(p => `<div class="person">${avatar(p.name)}<div><b>${esc(p.name)}</b><small>#${esc(p.store_code)} · since ${fmtTime(p.clock_in)}${p.late_minutes ? ` · ${p.late_minutes}m late` : ''}</small></div><div class="r">${p.on_break ? '<span class="pill warn">BREAK</span>' : hm(p.minutes)}</div></div>`).join('') || '<div class="empty" style="padding:20px">Nobody yet.</div>'}</div>
-          ${s ? `<button class="btn primary block" id="newsale" style="margin-top:14px">${ic('sale', 16)} New sale</button>` : ''}</div>
+          ${s || free() ? `<button class="btn primary block" id="newsale" style="margin-top:14px">${ic('sale', 16)} New sale</button>` : ''}</div>
       </div>
       <div class="grid2" style="margin-top:12px">
         <div class="card"><h3>Your next shifts</h3>${(S.state?.upcoming || []).length ? `<div class="people">${S.state.upcoming.map(u => `<div class="person"><div class="av" style="background:var(--panel2);color:var(--accent)">${ic('schedule', 15)}</div><div><b>${fmtDay(u.starts_at)}</b><small>${fmtTime(u.starts_at)}–${fmtTime(u.ends_at)}${u.store_code ? ` · #${esc(u.store_code)}` : ''}${u.note ? ` · ${esc(u.note)}` : ''}</small></div></div>`).join('')}</div>` : '<p class="muted" style="margin:0">Nothing scheduled. <a href="#schedule" id="toSched">See the schedule</a></p>'}</div>
@@ -263,7 +294,7 @@
   function pageSale() {
     const pg = $('pg');
     if (S.sale) return paintPayment();
-    if (!shift()) { pg.innerHTML = gate('Clock in first', 'Sales are tracked on your shift.'); return wireGate(); }
+    if (!shift() && !free()) { pg.innerHTML = gate('Clock in first', 'Sales are tracked on your shift.'); return wireGate(); }
     if (C.plans[draft.plan].quote) draft.plan = 'personal';
     pg.innerHTML = `<div class="sale">
       <div class="card">
@@ -285,7 +316,7 @@
     $('os').onchange = e => { draft.os = e.target.value; paintSum(); };
     $('conn').onchange = e => { draft.connection = e.target.value; paintSum(); };
     $('cust').oninput = keep;
-    window.A3forms.wire($('cust'), { os: () => draft.os, region: () => storeRegion(shift()?.store_code) });
+    window.A3forms.wire($('cust'), { os: () => draft.os, region: () => storeRegion(myStore()) });
     $('promo').oninput = () => { if (draft.promo) { draft.promo = null; $('promoOk').textContent = ''; paintSum(); } };
     $('apply').onclick = e => busy(e.target, async () => {
       const code = $('promo').value.trim(); if (!code) return;
@@ -616,7 +647,7 @@
     let p; try { p = await api('profile'); } catch (e) { pg.innerHTML = `<div class="empty-card">${esc(e.message)}</div>`; return; }
     if (S.page !== 'profile') return;
     const me = p.me || { name: S.me.name, email: S.me.email, role: S.me.role }, s = p.sales?.all_time || {};
-    pg.innerHTML = `<div class="card" style="display:flex;gap:18px;align-items:center;flex-wrap:wrap">${avatar(me.name, me.color, 'lg')}<div style="flex:1;min-width:200px"><h3 style="margin:0;font-size:24px">${esc(me.name)}</h3>
+    pg.innerHTML = `<div class="card profhead">${avatar(me.name, me.color, 'lg')}<div style="flex:1;min-width:200px"><h3 style="margin:0;font-size:24px">${esc(me.name)}</h3>
         <div class="muted">${esc(me.title || roleName(me.role))} · ${esc(me.email)}</div><div class="row" style="margin-top:8px">${S.me.owner ? `<span class="pill vio">${ic('crown', 12)} OWNER</span>` : `<span class="pill info">${esc(roleName(me.role).toUpperCase())}</span>`}<span class="pill dim">NEXUS ${esc(String(S.me.level).toUpperCase())}</span></div></div></div>
       <div class="stats" style="margin-top:12px">
         <div class="card stat"><div class="k">Your sales, all time</div><div class="v">${big(s.revenue)}</div><div class="s">${s.orders || 0} orders</div></div>
@@ -709,7 +740,7 @@
       $('sug').onclick = () => { $('amt').value = suggest(); keep(); sum(); };
       ['seats', 'amt'].forEach(id => $(id).oninput = () => { keep(); sum(); });
       $('back').onclick = () => go('quotes');
-      window.A3forms.wire($('cust'), { os: () => st.os, region: () => storeRegion(shift()?.store_code) });
+      window.A3forms.wire($('cust'), { os: () => st.os, region: () => storeRegion(myStore()) });
       sum();
     }
     function sum() {

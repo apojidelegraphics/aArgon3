@@ -186,6 +186,18 @@ test('staff: clock in, then sell with full customer details and a promo', async 
   assert.strictEqual(w.rpcs.filter(r => r.name === 'a3_sales').pop().a.p_user, null);
 });
 
+test('staff: the owner can sell without clocking in; everyone else clocks in first', async () => {
+  const w = world(), h = staff(ENV, w.fetch);
+  assert.match((await call(h, { action: 'sale', plan: 'personal', tier: 'pro', customer: PAT }, as(EMPLOYEE))).body.error, /Clock in/);
+  assert.match((await call(h, { action: 'sale', plan: 'personal', tier: 'pro', customer: PAT }, as(MANAGER))).body.error, /Clock in/);
+  const r = await call(h, { action: 'sale', plan: 'personal', tier: 'pro', billing: 'month', customer: PAT }, as(OWNER));
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body)); assert.match(r.body.url, /checkout\.stripe\.com/);
+  const s = Object.values(w.sessions).pop();
+  assert.strictEqual(s.metadata.a3_shift, undefined); assert.ok(s.metadata.a3_staff);   // credited to the owner, with no shift
+  // and the owner can still clock in (and be scheduled) like anyone else
+  assert.strictEqual((await call(h, { action: 'clock_in', store: '0028' }, as(OWNER))).status, 200);
+});
+
 test('staff: custom orders and Enterprise quotes: link, invoice or free', async () => {
   const w = world(), h = staff(ENV, w.fetch), M = as(MANAGER), hw = webhook(ENV, w.fetch);
   assert.strictEqual((await call(h, { action: 'quote_save', plan: 'enterprise', tier: 'max', amount: 12000, interval: 'year', customer: ENT }, as(EMPLOYEE))).status, 403);

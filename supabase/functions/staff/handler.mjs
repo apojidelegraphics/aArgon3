@@ -182,10 +182,10 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
     // ---------- selling
     async sale(who, b) {
       const state = await rpc('a3_staff_state', { p_user: who.id, p_tz: TZ });
-      if (!state?.shift) throw new Oops('Clock in before you start a sale.');
+      if (!state?.shift && !who.owner) throw new Oops('Clock in before you start a sale.');   // the owner never has to clock in
       const sel = A3.selection(b), customer = saleCustomer(sel.plan, b);
       const promo = b.promo ? await checkPromo({ rpc, code: b.promo, sel, amount: A3.price(sel.plan, sel.tier, sel.billing).amount }) : null;
-      const r = await startCheckout({ call, siteUrl: site, sel, customer, promo, staff: { id: who.id, name: who.name, shiftId: state.shift.id } });
+      const r = await startCheckout({ call, siteUrl: site, sel, customer, promo, staff: { id: who.id, name: who.name, shiftId: state?.shift?.id || undefined } });
       await log(who, 'sale_link', { order_id: r.order_id, plan: sel.plan, tier: sel.tier, billing: sel.billing, amount: r.amount, company: customer.company || undefined, promo: promo?.code });
       return { ...r, ...(promo ? { promo: promo.code, promo_label: promo.label, after: promo.after } : {}) };
     },

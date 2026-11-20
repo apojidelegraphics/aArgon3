@@ -2,6 +2,7 @@
 //   A3icon('name', size?) → '<svg …>'
 (function () {
   const I = {
+    menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
     today: '<path d="M3.5 12h3.2l2.3-6 4 12 2.4-6h5.1"/>',
     sale: '<path d="M4 5h2l1.8 9.2a1.6 1.6 0 0 0 1.6 1.3h7.7a1.6 1.6 0 0 0 1.6-1.2L20 8H7"/><circle cx="10" cy="19.5" r="1.3"/><circle cx="17" cy="19.5" r="1.3"/><path d="M13.5 9.5v4M11.5 11.5h4"/>',
     orders: '<path d="M6 3.5h12v17l-2-1.4-2 1.4-2-1.4-2 1.4-2-1.4-2 1.4z"/><path d="M9 8h6M9 11.5h6M9 15h3.5"/>',

@@ -26,7 +26,7 @@ Staff sign in with their Nexus account. The `staff` function checks every reques
 |---|---|---|
 | Employee | Nexus admins (not high-admin), or anyone a manager adds by email | Clock in/out and breaks, sell, look up orders, see the catalog and the schedule, their own timesheet and sales, ask for time off, edit their profile |
 | Manager | Nexus high-admins, or anyone the owner makes a manager | All of that, plus: everyone's timesheets and sales, fixing shifts, scheduling, time-off answers, custom orders and Enterprise quotes, invoices, comps, cancels and refunds, promo codes, adding employees, the activity log |
-| Owner | apojidelegraphics101010@gmail.com (set in `supabase/functions/staff/handler.mjs`) | Everything, plus: roles, pay rates (and pay estimates on timesheets), switching people off, store open/closed, business details, sales goal, stores |
+| Owner | apojidelegraphics101010@gmail.com (set in `supabase/functions/staff/handler.mjs`) | Everything, plus: never has to clock in (can still clock in and be scheduled), roles, pay rates (and pay estimates on timesheets), switching people off, store open/closed, business details, sales goal, stores |
 
 The repo is public, so nothing secret lives here: the pages only hold public keys, prices are worked out again on the server, and orders are only written once Stripe says they're paid.
 
