@@ -149,3 +149,8 @@ test('staff: a missing SQL migration says so plainly', async () => {
   const r2 = await call(h, { action: 'order', order_id: 'X' }, { authorization: 'Bearer tok-admin' });
   assert.strictEqual(r2.status, 404);
 });
+
+// Apoji Admin's desktop app (apoji://admin) uses the staff function for its Mexel page
+import { cors as corsFor } from '../supabase/functions/_shared/lib.mjs';
+import assertCors from 'node:assert';
+assertCors.strictEqual(corsFor(new Request('https://x/', { headers: { origin: 'apoji://admin' } }))['Access-Control-Allow-Origin'], 'apoji://admin');

@@ -7,7 +7,7 @@ export { A3 };
 
 // ---------- HTTP
 // The store and the terminal on GitHub Pages, the desktop app, and local testing.
-const ORIGINS = [/^https:\/\/apojidelegraphics\.github\.io$/, /^aargon3:\/\/app$/, /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/];
+const ORIGINS = [/^https:\/\/apojidelegraphics\.github\.io$/, /^aargon3:\/\/app$/, /^apoji:\/\/admin$/, /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/];
 export function cors(req, extra = []) {
   const o = req.headers.get('origin') || '';
   const ok = ORIGINS.some(r => r.test(o)) || extra.includes(o);
