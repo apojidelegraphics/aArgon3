@@ -17,7 +17,9 @@ export function world({ legacy = false } = {}) {
              [OUTSIDER]: { id: 'u-user', email: 'joe@x.co', level: null, nick: 'Joe' },
              [INVITED]: { id: 'u-inv', email: 'casey@shop.co', level: null, nick: 'Casey' } },
     staff: [{ id: 9, user_id: null, email: 'casey@shop.co', role: 'employee', active: true, display_name: 'Casey', pay_rate: 14 }],
-    schedule: [], timeoff: [], quotes: {}, promos: [], points: [], lateNext: 0, settings: { store: { open: true, message: '' }, business: { name: 'Apoji Delegraphics' }, goals: { monthly_revenue: 0 } } };
+    schedule: [], timeoff: [], quotes: {}, promos: [], points: [], lateNext: 0,
+    // 2.4
+    subs: {}, subUpdates: [], credits: [], taxRates: {}, archivedTax: [], emails: [], emailFail: null, attempts: [], closures: [], referrals: [], abandoned: [], invoiceList: [], settings: { store: { open: true, message: '' }, business: { name: 'Apoji Delegraphics' }, goals: { monthly_revenue: 0 } } };
   w.stores = [{ code: '0028', name: 'Neo Silicon Valley Flagship (Hub Zero)', region: 'A', active: true }, { code: '2710', name: 'San Francisco Soar Node', region: 'A', active: true },
     { code: '0427', name: 'Raleigh-Durham Omni-Node', region: 'B', active: true }, { code: '0001', name: 'Apoji Corporate Office NC', region: 'E', active: true }];
   const shiftOf = u => w.shifts[u] || null;
@@ -38,7 +40,15 @@ export function world({ legacy = false } = {}) {
     amount: (o.amount_cents || 0) / 100, customer_name: o.customer_name, customer_email: o.customer_email, customer_phone: o.customer_phone, company_name: o.company_name,
     customer_info: o.customer_info, seats: o.seats, quote_no: o.quote_no, node_id: o.node_id, jurisdiction: o.target_jurisdiction, promo_code: o.promo_code,
     operator: o.operator, store: o.store, source: o.source, config: o.config, models: (o.items || []).map(i => i.model), subscription: !!o.stripe_subscription_id,
-    paid_total: (o.amount_cents || 0) / 100, payments: 1 });
+    paid_total: (o.amount_cents || 0) / 100, payments: 1,
+    region: o.region || null, tax: (o.tax_cents || 0) / 100, current_period_end: o.current_period_end || null, cancel_at: o.cancel_at || null, paused_until: o.paused_until || null,
+    expires_at: o.expires_at || null, referral_code: o.referral_code || null, referred_by: o.referred_by || null, gift: o.gift || null, history: o.history || [],
+    stripe_customer: !!o.stripe_customer_id, referrals: w.referrals.filter(r => r.referrer_order === o.order_id).length,
+    referral_credit: w.referrals.filter(r => r.referrer_order === o.order_id).reduce((m, r) => m + r.credit_cents, 0) / 100 });
+  // a subscription the way Stripe returns it (2024-06-20)
+  w.sub = id => { const x = w.subs[id] || (w.subs[id] = { id, status: 'active', customer: 'cus_1', current_period_end: Math.floor(Date.now() / 1000) + 20 * 864e2, cancel_at_period_end: false, pause_collection: null,
+      metadata: w.subMeta || {}, items: { data: [{ id: 'si_' + id.slice(-4), price: { unit_amount: 2500, recurring: { interval: 'month' }, product: 'prod_' + id.slice(-4) }, tax_rates: [] }] } });
+    return { ...x, latest_invoice: { payment_intent: 'pi_1' } }; };
   const res = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   const oops = msg => res({ code: 'P0001', message: msg }, 400);
   const form = body => { const f = new URLSearchParams(body || ''), meta = {}; for (const [k, v] of f) { const m = k.match(/^metadata\[(.+)\]$/); if (m) meta[m[1]] = v; } return { f, meta }; };
@@ -52,16 +62,39 @@ export function world({ legacy = false } = {}) {
       const { f, meta } = form(init.body);
       if (p === 'checkout/sessions' && method === 'POST') {
         const id = 'cs_test_' + crypto.randomBytes(4).toString('hex'), once = f.get('mode') === 'payment';
-        w.sessions[id] = { id, form: f, metadata: meta, status: 'open', payment_status: 'unpaid', mode: f.get('mode'), amount_total: +f.get('line_items[0][price_data][unit_amount]'), currency: 'usd',
-          subscription: once ? null : 'sub_' + id.slice(-6), invoice: 'in_' + id.slice(-6), customer: 'cus_1', customer_details: { name: 'Pat Doe', email: f.get('customer_email') || 'pat@x.co', phone: null },
-          total_details: { amount_discount: f.get('discounts[0][promotion_code]') ? 500 : 0 } };
+        const unit = +f.get('line_items[0][price_data][unit_amount]'), txr = w.taxRates[f.get('line_items[0][tax_rates][0]')];
+        const off = f.get('discounts[0][promotion_code]') ? 500 : f.get('discounts[0][coupon]') ? (w.coupons?.[f.get('discounts[0][coupon]')] || 0) : 0;
+        const tax = txr ? Math.round((unit - off) * txr / 100) : 0;
+        w.sessions[id] = { id, form: f, metadata: meta, status: 'open', payment_status: 'unpaid', mode: f.get('mode'), amount_total: unit - off + tax, currency: 'usd',
+          subscription: once ? null : 'sub_' + id.slice(-6), invoice: 'in_' + id.slice(-6), customer: 'cus_' + id.slice(-4), customer_details: { name: 'Pat Doe', email: f.get('customer_email') || 'pat@x.co', phone: null },
+          total_details: { amount_discount: off, amount_tax: tax }, expires_at: f.get('expires_at') ? +f.get('expires_at') : null };
         return res({ id, url: `https://checkout.stripe.com/c/pay/${id}` });
       }
       if (p.startsWith('checkout/sessions/')) { const s = w.sessions[decodeURIComponent(p.split('/')[2])]; return res(s || {}, s ? 200 : 404); }
-      if (p.startsWith('subscriptions/') && method === 'GET') return res({ id: 'sub_1', status: 'active', metadata: w.subMeta || {}, latest_invoice: { payment_intent: 'pi_1' } });
+      if (p.startsWith('subscriptions/') && method === 'GET') return res(w.sub(decodeURIComponent(p.split('/')[1].split('?')[0])));
+      if (/^subscriptions\/[^/]+$/.test(p) && method === 'POST') {
+        const x = w.sub(p.split('/')[1]); const live = w.subs[x.id];
+        w.subUpdates.push({ id: x.id, form: f });
+        if (f.has('pause_collection')) live.pause_collection = null;
+        if (f.get('pause_collection[behavior]')) live.pause_collection = { behavior: f.get('pause_collection[behavior]'), resumes_at: +f.get('pause_collection[resumes_at]') };
+        if (f.has('cancel_at_period_end')) live.cancel_at_period_end = f.get('cancel_at_period_end') === 'true';
+        if (f.get('items[0][price_data][unit_amount]')) live.items.data[0].price = { unit_amount: +f.get('items[0][price_data][unit_amount]'), recurring: { interval: f.get('items[0][price_data][recurring][interval]') }, product: f.get('items[0][price_data][product]') };
+        return res(w.sub(x.id));
+      }
+      if (p === 'invoices/upcoming') {
+        const x = w.sub(u.searchParams.get('subscription')), old = x.items.data[0].price.unit_amount, nu = +u.searchParams.get('subscription_items[0][price_data][unit_amount]');
+        const half = v => Math.round(v / 2);   // halfway through the month
+        return res({ amount_due: nu + half(nu) - half(old), total: nu + half(nu) - half(old), lines: { data: [{ proration: true, amount: -half(old) }, { proration: true, amount: half(nu) }, { proration: false, amount: nu }] } });
+      }
+      if (p === 'invoices' && method === 'GET') return res({ data: w.invoiceList });
+      if (/^customers\/[^/]+\/balance_transactions$/.test(p)) { const t = { id: 'cbtxn_' + (w.credits.length + 1), customer: p.split('/')[1], amount: +f.get('amount') }; w.credits.push(t); return res(t); }
+      if (p === 'tax_rates') { const id = 'txr_' + f.get('percentage').replace('.', '_') + '_' + Object.keys(w.taxRates).length; w.taxRates[id] = +f.get('percentage'); return res({ id, percentage: +f.get('percentage') }); }
+      if (/^tax_rates\//.test(p)) { w.archivedTax.push(p.split('/')[1]); return res({ id: p.split('/')[1], active: false }); }
+      if (p === 'billing_portal/sessions') return w.noPortal ? res({ error: { message: 'No configuration provided and your test mode default configuration has not been created.' } }, 400) : res({ url: 'https://billing.stripe.com/p/session/test_' + f.get('customer') });
+      if (/^products\/[^/]+$/.test(p)) return res({ id: p.split('/')[1], name: f.get('name') });
       if (p.startsWith('subscriptions/') && method === 'DELETE') return res({ id: 'sub_1', status: 'canceled' });
       if (p === 'refunds') return res({ id: 're_1', amount: 2500 });
-      if (p === 'coupons') return res({ id: 'co_' + f.get('name'), percent_off: f.get('percent_off'), amount_off: f.get('amount_off') });
+      if (p === 'coupons') { const id = 'co_' + f.get('name').replace(/\W+/g, '_') + (f.get('metadata[a3_ref]') ? '_' + crypto.randomBytes(2).toString('hex') : ''); (w.coupons = w.coupons || {})[id] = +f.get('amount_off') || 0; return res({ id, percent_off: f.get('percent_off'), amount_off: f.get('amount_off') }); }
       if (p === 'promotion_codes') return res({ id: 'promo_' + f.get('code'), code: f.get('code'), coupon: f.get('coupon') });
       if (p.startsWith('promotion_codes/')) return res({ id: p.split('/')[1], active: f.get('active') === 'true' });
       if (p === 'customers') return res({ id: 'cus_' + crypto.randomBytes(3).toString('hex'), email: f.get('email') });
@@ -71,6 +104,10 @@ export function world({ legacy = false } = {}) {
       if (p === 'subscriptions' && method === 'POST') { const id = 'in_' + crypto.randomBytes(3).toString('hex'); w.invoices[id] = { id, metadata: {}, form: f, subscription: 'sub_inv1' }; w.subMeta = meta; return res({ id: 'sub_inv1', latest_invoice: id, metadata: meta }); }
       if (/^invoices\/[^/]+\/(finalize|send|void)$/.test(p)) return res({ id: p.split('/')[1], hosted_invoice_url: `https://invoice.stripe.com/i/${p.split('/')[1]}` });
       return res({ error: { message: 'unknown stripe call ' + p } }, 400);
+    }
+    if (u.host === 'api.emailjs.com') {
+      const b = JSON.parse(init.body); w.emails.push(b);
+      return w.emailFail ? new Response(w.emailFail, { status: 400 }) : new Response('OK', { status: 200 });
     }
     if (u.host === 'nexus.test') {
       const who = w.users[(init.headers.Authorization || '').replace('Bearer ', '')];
@@ -136,6 +173,42 @@ export function world({ legacy = false } = {}) {
         case 'a3_quote_save': { const p = a.p, q = w.quotes[p.quote_no] || { status: 'draft', created_at: now() }; Object.assign(q, Object.fromEntries(Object.entries(p).filter(([, v]) => v != null))); q.amount = (q.amount_cents || 0) / 100; w.quotes[p.quote_no] = q; return res(q); }
         case 'a3_quotes': return res(Object.values(w.quotes).filter(q => !a.p_status || q.status === a.p_status).reverse());
         case 'a3_quote': return res(w.quotes[String(a.p_no).toUpperCase()] ? { ...w.quotes[String(a.p_no).toUpperCase()] } : null);
+        // ---- 2.4
+        case 'a3_order_patch': { const o = w.orders[a.p_order]; if (!o) return oops('Order not found.'); const p = a.p;
+          for (const k of ['region', 'tax_cents', 'current_period_end', 'cancel_at', 'paused_until', 'expires_at', 'referred_by', 'gift', 'gift_code', 'tier', 'plan_type', 'billing', 'config', 'items', 'seats', 'amount_cents']) if (k in p) o[k] = p[k];
+          if (p.referral_code && !o.referral_code) o.referral_code = p.referral_code;
+          if (p.status) o.status = p.status.toUpperCase();
+          if (p.event) (o.history = o.history || []).push({ ...p.event, at: now() });
+          return res(orderJson(o)); }
+        case 'a3_order_stripe': { const o = w.orders[String(a.p_order).toUpperCase()]; return res(o ? { order_id: o.order_id, customer: o.stripe_customer_id || null, subscription: o.stripe_subscription_id || null, email: o.customer_email, status: o.status, tier: o.tier, plan: o.plan_type, quote_no: o.quote_no, source: o.source } : null); }
+        case 'a3_subscription_sync': { const list = Object.values(w.orders).filter(o => o.stripe_subscription_id === a.p_subscription && o.status !== 'GIFT');
+          for (const o of list) { if (a.p.status) o.status = a.p.status; if (a.p.current_period_end) o.current_period_end = a.p.current_period_end; if ('cancel_at' in a.p) o.cancel_at = a.p.cancel_at; if ('paused_until' in a.p) o.paused_until = a.p.paused_until; }
+          return res(list.length); }
+        case 'a3_portal_attempt': { if (a.p_failed) for (const k of a.p_keys) w.attempts.push(k); return res(Math.max(0, ...a.p_keys.map(k => w.attempts.filter(x => x === k).length))); }
+        case 'a3_portal_order': { const o = w.orders[String(a.p_order).toUpperCase().trim()], e = String(a.p_email).trim().toLowerCase();
+          return res(o && o.status !== 'GIFT' && [o.customer_email, o.customer_info?.billing_email, o.gift?.to_email].filter(Boolean).map(x => x.toLowerCase()).includes(e) ? orderJson(o) : null); }
+        case 'a3_gift': { const o = Object.values(w.orders).find(x => x.gift_code && x.gift_code === String(a.p_code).toUpperCase().trim());
+          return res(o ? { code: o.gift_code, plan: o.plan_type, tier: o.tier, months: o.gift.months, claimed: o.status !== 'GIFT', from_name: o.gift.from_name, to_name: o.gift.to_name, message: o.gift.message } : null); }
+        case 'a3_gift_claim': { const o = Object.values(w.orders).find(x => x.gift_code === a.p_code); if (!o) return oops("That gift code isn't right."); if (o.status !== 'GIFT') return oops('That gift has already been claimed.');
+          Object.assign(o, { status: 'ACTIVE', customer_email: a.p_customer.email.toLowerCase(), customer_name: `${a.p_customer.first} ${a.p_customer.last || ''}`.trim(), customer_info: a.p_customer,
+            expires_at: new Date(Date.now() + o.gift.months * 30 * 864e5).toISOString(), gift: { ...o.gift, claimed_at: now() } }); return res(orderJson(o)); }
+        case 'a3_expire': return res(0);
+        case 'a3_referrer': { const o = Object.values(w.orders).find(x => x.referral_code === String(a.p_code).toUpperCase() && ['ACTIVE', 'PAID', 'PAUSED'].includes(x.status));
+          return res(o ? { order_id: o.order_id, email: (o.customer_email || '').toLowerCase(), customer: o.stripe_customer_id || null, subscription: o.stripe_subscription_id || null, plan: o.plan_type, tier: o.tier, status: o.status, name: o.customer_name,
+            this_year: w.referrals.filter(r => r.code === o.referral_code && r.status === 'credited').length } : null); }
+        case 'a3_referral_record': { if (w.referrals.some(r => r.new_order === a.p.new_order)) return res({ recorded: false }); const r = { ...a.p, credit_cents: a.p.credit_cents || 0 }; w.referrals.push(r); return res({ ...r, recorded: true }); }
+        case 'a3_referrals': return res(w.referrals.slice().reverse());
+        case 'a3_abandoned_save': { if (w.abandoned.some(x => x.session_id === a.p.session_id)) return res({ saved: false, reason: 'seen' });
+          if (Object.values(w.orders).some(o => (o.customer_email || '').toLowerCase() === a.p.email.toLowerCase())) return res({ saved: false, reason: 'already bought' });
+          w.abandoned.push({ ...a.p, email: a.p.email.toLowerCase(), created_at: now() }); return res({ saved: true }); }
+        case 'a3_abandoned_mark': { const x = w.abandoned.find(y => y.session_id === a.p_session); if (x) { x.email_error = a.p_error; if (!a.p_error) x.emailed_at = now(); } return res(null); }
+        case 'a3_abandoned': return res(w.abandoned.slice().reverse());
+        case 'a3_stores_public': return res({ stores: w.stores.filter(x => x.active).map(x => ({ code: x.code, name: x.name, region: x.region, hours: x.hours || null })), closures: w.closures });
+        case 'a3_store_hours': { const st = w.stores.find(x => x.code === a.p_code); if (!st) return oops(`No store #${a.p_code}.`); st.hours = a.p_hours; return res({ stores: w.stores, closures: w.closures }); }
+        case 'a3_closure_save': { const p = a.p; if (p.ends_on < p.starts_on) return oops('The closure has to end on or after the day it starts.');
+          if (p.id) Object.assign(w.closures.find(c => c.id === p.id), p); else w.closures.push({ id: w.closures.length + 1, store_code: p.store_code || null, starts_on: p.starts_on, ends_on: p.ends_on, reason: p.reason });
+          return res({ stores: w.stores, closures: w.closures }); }
+        case 'a3_closure_delete': w.closures = w.closures.filter(c => c.id !== a.p_id); return res({ stores: w.stores, closures: w.closures });
         case 'a3_quote_request': { const p = a.p, em = p.customer.email.toLowerCase();
           if (Object.values(w.quotes).filter(q => q.source === 'web' && q.customer?.email?.toLowerCase() === em).length >= 3) return oops("We already have your requests. We'll be in touch soon.");
           w.quotes[p.quote_no] = { ...p, status: 'requested', source: 'web', amount_cents: 0, amount: 0, created_by: 'Website', created_at: now() }; return res({ quote_no: p.quote_no }); }

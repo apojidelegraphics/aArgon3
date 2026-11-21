@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#040b14">
+<title>Stores and hours · aARgon3</title>
+<meta name="description" content="aARgon3 stores, opening hours, and days we're closed.">
+<link rel="icon" type="image/png" href="icons/favicon.png">
+<link rel="icon" type="image/svg+xml" href="icons/logo.svg">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/site.css">
+<link rel="stylesheet" href="assets/store.css">
+<script src="assets/config.js"></script>
+<script src="assets/catalog.js"></script>
+</head>
+<body>
+<div class="bgglow"></div>
+<nav><a class="brand" href="./"><img src="icons/icon-192.png" alt="">AARGON3</a>
+  <div class="links"><a href="./#plans">Plans</a><a href="account.html">Your order</a><a href="./#faq">Help</a><a class="keep btn primary small" href="./#plans">See plans</a></div></nav>
+<main class="acct">
+  <section class="acct-hero">
+    <div class="kicker">Stores</div>
+    <h1>Come say hi.</h1>
+    <p class="lead">Buy, upgrade or get help in person at any aARgon3 store, or order online anytime. Hours are Eastern time.</p>
+    <div class="field-row"><input class="field" id="q" placeholder="Search by city or store number" autocomplete="off"></div>
+  </section>
+  <div id="closures"></div>
+  <div id="list"><div class="empty"><span class="spin"></span></div></div>
+</main>
+<footer><span>aARgon3 by Apoji Delegraphics</span><span class="sp"></span><a href="./">Store</a><a href="account.html">Your order</a><a href="terms/">Terms of Sale</a></footer>
+<script>
+(function () {
+  const CFG = window.A3_CONFIG, C = window.A3.C;
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const DAYS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
+  const t12 = hm => { const [h, m] = hm.split(':').map(Number); return `${h % 12 || 12}${m ? ':' + String(m).padStart(2, '0') : ''} ${h < 12 ? 'AM' : 'PM'}`; };
+  const range = h => h ? `${t12(h[0])}–${t12(h[1])}` : 'Closed';
+  const nice = d => new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const span = c => c.starts_on === c.ends_on ? nice(c.starts_on) : `${nice(c.starts_on)} – ${nice(c.ends_on)}`;
+  let data = null;
+  function paint() {
+    const q = $('q').value.trim().toLowerCase();
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+    const upcoming = data.closures.filter(c => c.ends_on >= today);
+    $('closures').innerHTML = upcoming.length ? `<div class="card closures"><h3>Closed days coming up</h3>${upcoming.map(c => `<div class="crow"><b>${c.store_code ? `#${esc(c.store_code)} ${esc((data.stores.find(s => s.code === c.store_code) || {}).name || '')}` : 'Online store'}</b><span>${span(c)}${c.reason ? ` · ${esc(c.reason)}` : ''}</span></div>`).join('')}</div>` : '';
+    const regions = {};
+    for (const s of data.stores) if (!q || `${s.name} ${s.code}`.toLowerCase().includes(q)) (regions[s.region] = regions[s.region] || []).push(s);
+    $('list').innerHTML = Object.keys(regions).sort().map(r => `<h2 class="region">Region ${esc(r)} · ${esc(C.regions[r] || '')}</h2><div class="stores">${regions[r].map(s => {
+      const n = s.now || {}, badge = n.open === true ? `<span class="pill ok">Open now · until ${t12(n.closes)}</span>` : n.open === false ? `<span class="pill bad">${esc(n.reason ? `Closed today · ${n.reason}` : 'Closed now')}</span>` : '<span class="pill dim">Hours not posted</span>';
+      return `<div class="card storecard"><div class="row" style="justify-content:space-between;gap:8px;align-items:flex-start"><div><b>${esc(s.name)}</b><div class="muted mono" style="font-size:12.5px">#${esc(s.code)}</div></div>${badge}</div>
+        ${s.hours ? `<details><summary>Hours</summary><div class="hrs">${DAYS.map(([k, l]) => `<span>${l}</span><span>${range(s.hours[k])}</span>`).join('')}</div></details>` : ''}</div>`; }).join('')}</div>`).join('')
+      || '<p class="muted">No stores match that search.</p>';
+  }
+  fetch(`${CFG.functions}/checkout`, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: CFG.storeKey }, body: JSON.stringify({ action: 'stores' }) })
+    .then(r => r.ok ? r.json() : Promise.reject()).then(d => { data = d; paint(); })
+    .catch(() => { $('list').innerHTML = '<p class="muted">Store hours aren\'t available right now. Please try again soon.</p>'; });
+  $('q').oninput = () => data && paint();
+})();
+</script>
+</body>
+</html>

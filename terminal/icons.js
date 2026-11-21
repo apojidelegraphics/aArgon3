@@ -4,6 +4,10 @@
   const I = {
     star: '<path d="m12 3.6 2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/>',
     thumbsdown: '<path d="M7 13.5V4H4.5v9.5zM7 13.5l3.4 6.3a1.8 1.8 0 0 0 3.3-1.2l-.7-3.6h5a2 2 0 0 0 2-2.4l-1.2-6A2 2 0 0 0 16.8 5H7"/>',
+    swap: '<path d="M7 7h11l-3-3M17 17H6l3 3"/>',
+    pause: '<rect x="6.5" y="5" width="3.5" height="14" rx="1"/><rect x="14" y="5" width="3.5" height="14" rx="1"/>',
+    play: '<path d="M8 5.5v13l10-6.5z"/>',
+    percent: '<path d="M19 5 5 19"/><circle cx="7" cy="7" r="2.3"/><circle cx="17" cy="17" r="2.3"/>',
     menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
     today: '<path d="M3.5 12h3.2l2.3-6 4 12 2.4-6h5.1"/>',
     sale: '<path d="M4 5h2l1.8 9.2a1.6 1.6 0 0 0 1.6 1.3h7.7a1.6 1.6 0 0 0 1.6-1.2L20 8H7"/><circle cx="10" cy="19.5" r="1.3"/><circle cx="17" cy="19.5" r="1.3"/><path d="M13.5 9.5v4M11.5 11.5h4"/>',

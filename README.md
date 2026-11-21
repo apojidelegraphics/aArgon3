@@ -24,22 +24,23 @@ Staff sign in with their Nexus account. The `staff` function checks every reques
 
 | Role | Who | Can |
 |---|---|---|
-| Employee | Nexus admins (not high-admin), or anyone a manager adds by email | Clock in/out and breaks, sell, look up orders, see the catalog and the schedule, their own timesheet and sales, ask for time off, edit their profile |
-| Manager | Nexus high-admins, or anyone the owner makes a manager | All of that, plus: everyone's timesheets and sales, fixing shifts, scheduling, time-off answers, custom orders and Enterprise quotes, invoices, comps, cancels and refunds, promo codes, adding employees, the activity log |
-| Owner | apojidelegraphics101010@gmail.com (set in `supabase/functions/staff/handler.mjs`) | Everything, plus: give points to managers, the late-clock-in points setting, never has to clock in (can still clock in and be scheduled), roles, pay rates (and pay estimates on timesheets), switching people off, store open/closed, business details, sales goal, stores |
+| Employee | Nexus admins (not high-admin), or anyone a manager adds by email | Clock in/out and breaks, sell, look up orders, email receipts, see the catalog and the schedule, their own timesheet and sales, ask for time off, edit their profile |
+| Manager | Nexus high-admins, or anyone the owner makes a manager | All of that, plus: everyone's timesheets and sales, fixing shifts, scheduling, time-off answers, custom orders and Enterprise quotes, invoices, comps, cancels and refunds, plan changes, pauses, cancel-at-period-end, closures, promo codes, referrals and checkout reminders, adding employees, the activity log |
+| Owner | apojidelegraphics101010@gmail.com (set in `supabase/functions/staff/handler.mjs`) | Everything, plus: give points to managers, the late-clock-in points setting, never has to clock in (can still clock in and be scheduled), roles, pay rates (and pay estimates on timesheets), switching people off, store open/closed, store hours, tax by region, email setup, referral/reminder/alert settings, business details, sales goal, stores |
 
 The repo is public, so nothing secret lives here: the pages only hold public keys, prices are worked out again on the server, and orders are only written once Stripe says they're paid.
 
 ## Setup / updating
 
-1. **Database**: Supabase → aARgon3 & Mexel Backend → SQL Editor → run `supabase/aargon3-2.0.sql` (once), then `supabase/aargon3-2.1.sql`, then `supabase/aargon3-2.3.sql` (points and website custom-order requests).
+1. **Database**: Supabase → aARgon3 & Mexel Backend → SQL Editor → run `supabase/aargon3-2.0.sql` (once), then `supabase/aargon3-2.1.sql`, then `supabase/aargon3-2.3.sql` (points and website custom-order requests), then `supabase/aargon3-2.4.sql` (portal, gifts, referrals, plan changes, pausing, tax, reminders, store hours).
 2. **Functions**: from this folder, `npx supabase functions deploy checkout stripe-webhook staff --project-ref yuergfrpfhtcxjkcgjrx --no-verify-jwt --use-api`.
-3. **Secrets** (Supabase → Edge Functions → Secrets): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SITE_URL` = `https://apojidelegraphics.github.io/aArgon3`.
+3. **Secrets** (Supabase → Edge Functions → Secrets): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SITE_URL` = `https://apojidelegraphics.github.io/aArgon3`. Optional: `EMAILJS_PRIVATE_KEY` (only if your EmailJS account requires the private key).
 4. **Stripe webhook** → `https://yuergfrpfhtcxjkcgjrx.supabase.co/functions/v1/stripe-webhook`, Snapshot payloads, events:
-   `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`.
+   `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.expired`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`.
 5. **Pages**: GitHub → Settings → Pages → Deploy from a branch → `main` / root.
 6. **Desktop app**: push a tag like `v2.3.0` and GitHub Actions builds the Mac and Windows apps into a Release. Windows copies (2.3+) update themselves from that Release (`latest.yml`); Mac shows a download note.
-7. Optional: Stripe → Settings → Billing → Customer portal → copy the login link into `assets/config.js` (`portalUrl`).
+7. **Email** (EmailJS, the old aARgon3 account): Account → Security → turn on "Allow EmailJS API for non-browser applications". Receipts use the existing template. For gifts and checkout reminders, make a second template from `emails/message-template.html` and put its id in the terminal: Settings → Email.
+8. **Card updates** in Your order: Stripe → Settings → Billing → Customer portal → Save (turns on Stripe's card-update page).
 
 Test with card `4242 4242 4242 4242`, any future date, any CVC. In the sandbox Stripe only emails invoices to your own team's addresses.
 

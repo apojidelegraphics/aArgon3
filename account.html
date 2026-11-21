@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#040b14">
+<meta name="robots" content="noindex">
+<title>Your order · aARgon3</title>
+<meta name="description" content="Look up your aARgon3 order: plan, renewal date, invoices and seats. Change plan, pause or cancel, or claim a gift.">
+<link rel="icon" type="image/png" href="icons/favicon.png">
+<link rel="icon" type="image/svg+xml" href="icons/logo.svg">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/site.css">
+<link rel="stylesheet" href="assets/store.css">
+<script src="assets/config.js"></script>
+<script src="assets/catalog.js"></script>
+<script src="assets/forms.js"></script>
+</head>
+<body>
+<div class="bgglow"></div>
+<nav><a class="brand" href="./"><img src="icons/icon-192.png" alt="">AARGON3</a>
+  <div class="links"><a href="./#plans">Plans</a><a href="stores.html">Stores</a><a href="./#faq">Help</a><a class="keep btn primary small" href="./#plans">See plans</a></div></nav>
+
+<main class="acct" id="main">
+  <section class="acct-hero">
+    <div class="kicker">Your order</div>
+    <h1>Your plan, your way.</h1>
+    <p class="lead">See your plan, renewal date and invoices. Change plan, pause for up to 3 months, or cancel. No account needed: just your order number and email.</p>
+    <div class="seg acct-tabs" id="tabs"><button data-t="find" class="on">Find my order</button><button data-t="gift">Claim a gift</button></div>
+    <form class="card acct-find" id="find" novalidate>
+      <div class="two">
+        <div><label class="lbl">Order number</label><input class="field mono" id="ono" placeholder="XXXXXXXX-XXXX" autocomplete="off" maxlength="20" autocapitalize="characters"></div>
+        <div><label class="lbl">Email you used</label><input class="field" id="oem" type="email" placeholder="you@example.com" autocomplete="email" maxlength="120"></div>
+      </div>
+      <div class="err" id="fer"></div>
+      <div class="row" style="justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:6px"><span class="fine">Your order number is on your Stripe receipt and thank-you page.</span><button class="btn primary" id="go">Look it up</button></div>
+    </form>
+    <form class="card acct-find" id="gift" novalidate hidden>
+      <div id="giftStep1">
+        <label class="lbl">Gift code</label>
+        <div class="promo-row"><input class="field mono" id="gcode" placeholder="GIFT-XXXX-XXXX" autocomplete="off" maxlength="20" autocapitalize="characters"><button class="btn primary" id="gcheck">Check</button></div>
+        <div class="err" id="ger"></div>
+      </div>
+      <div id="giftStep2" hidden></div>
+    </form>
+  </section>
+  <section id="view" hidden></section>
+</main>
+
+<footer><span>aARgon3 by Apoji Delegraphics</span><span class="sp"></span><a href="./">Store</a><a href="stores.html">Stores</a><a href="terms/">Terms of Sale</a><a class="mail" href="#">Contact</a></footer>
+<div class="toasts" id="toasts"></div>
+<script>
+(function () {
+  const CFG = window.A3_CONFIG, A3 = window.A3, { C, TIERS, PLANS, price, money } = A3;
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const day = d => d ? new Date(d).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) : '—';
+  const tierName = t => C.tiers[t]?.name || t || '';
+  const planKey = name => PLANS.find(k => C.plans[k].name === name) || 'personal';
+  const site = location.href.replace(/account\.html.*$/, '');
+  document.querySelectorAll('a.mail').forEach(a => a.href = `mailto:${C.contactEmail}?subject=${encodeURIComponent('aARgon3 order help')}`);
+  let me = null, view = null;   // { order, email } and the last portal response
+  try { const s = JSON.parse(sessionStorage.getItem('a3_portal') || 'null'); if (s?.order) me = s; } catch {}
+
+  function toast(msg, kind = '') { const t = document.createElement('div'); t.className = 'toast ' + kind; t.textContent = msg; $('toasts').append(t); setTimeout(() => t.remove(), 6000); }
+  async function post(body) {
+    let res;
+    try { res = await fetch(`${CFG.functions}/checkout`, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: CFG.storeKey }, body: JSON.stringify(body) }); }
+    catch { throw new Error("Couldn't reach aARgon3. Check your connection and try again."); }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Something went wrong (${res.status}).`);
+    return data;
+  }
+  async function busy(btn, label, fn) { const was = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<span class="spin"></span> ${label}`; try { return await fn(); } finally { btn.disabled = false; btn.innerHTML = was; } }
+  function sheet(html, wire) {
+    const wrap = document.createElement('div'); wrap.className = 'scrim'; wrap.innerHTML = `<div class="sheet">${html}</div>`; document.body.append(wrap);
+    const close = () => { wrap.remove(); document.removeEventListener('keydown', k); };
+    const k = e => { if (e.key === 'Escape') close(); };
+    wrap.onclick = e => { if (e.target === wrap) close(); }; document.addEventListener('keydown', k);
+    wrap.querySelectorAll('[data-close]').forEach(b => b.onclick = close);
+    wire?.(wrap.firstElementChild, close); return close;
+  }
+
+  // ---------- tabs
+  $('tabs').querySelectorAll('button').forEach(b => b.onclick = () => {
+    $('tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    $('find').hidden = b.dataset.t !== 'find'; $('gift').hidden = b.dataset.t !== 'gift';
+  });
+
+  // ---------- find my order
+  $('find').onsubmit = async e => {
+    e.preventDefault(); $('fer').textContent = '';
+    const order = $('ono').value.trim().toUpperCase(), email = $('oem').value.trim();
+    if (!order || !email) { $('fer').textContent = 'Enter your order number and the email you used.'; return; }
+    await busy($('go'), 'Looking…', async () => {
+      try { view = await post({ action: 'portal', order, email }); me = { order, email }; sessionStorage.setItem('a3_portal', JSON.stringify(me)); render(); }
+      catch (err) { $('fer').textContent = err.message; }
+    });
+  };
+  const act = (action, extra = {}) => post({ action, ...me, ...extra });
+
+  const STATUS = { ACTIVE: ['ok', 'Active'], PAID: ['ok', 'Active'], PAUSED: ['warn', 'Paused'], CANCELLED: ['bad', 'Cancelled'], REFUNDED: ['bad', 'Refunded'], EXPIRED: ['dim', 'Ended'] };
+  function render() {
+    const o = view.order, c = o.config || {}, [cls, word] = STATUS[o.status] || ['dim', o.status];
+    const ending = o.cancel_at && o.status !== 'CANCELLED';
+    const when = o.status === 'PAUSED' ? `Paused until <b>${day(o.paused_until)}</b>. Nothing is charged while it's paused.`
+      : ending ? `Ends on <b>${day(o.cancel_at)}</b>. It keeps working until then.`
+      : o.expires_at ? `${o.status === 'EXPIRED' ? 'Ended' : 'Runs until'} <b>${day(o.expires_at)}</b>${o.gift ? ' (a gift, paid in full)' : ''}.`
+      : o.subscription && o.current_period_end && o.status === 'ACTIVE' ? `Renews on <b>${day(o.current_period_end)}</b>.`
+      : o.billing === 'once' ? 'Paid once. Nothing renews.' : o.billing === 'comp' ? 'Complimentary. Nothing to pay.' : '';
+    const amount = o.price ?? o.amount;
+    $('find').closest('section').hidden = true;
+    $('view').hidden = false;
+    $('view').innerHTML = `
+      <div class="acct-top"><div><div class="kicker">Order <span class="mono">${esc(o.order_id)}</span></div>
+        <h1>${esc(o.plan)} ${esc(tierName(o.tier))}</h1><p class="muted" style="margin:0">${esc(o.company_name || o.customer_name || '')}${o.customer_email ? ` · ${esc(o.customer_email)}` : ''}</p></div>
+        <span class="sp"></span><span class="pill ${cls}">${esc(word)}</span><button class="btn small quiet" id="out">Not you? Look up another</button></div>
+      <div class="acct-grid">
+        <div class="card"><h3>Billing</h3>
+          ${amount != null && o.billing !== 'comp' ? `<div class="acct-price">${money(Number(amount))}<small>${o.interval === 'year' || o.billing === 'year' ? '/year' : o.billing === 'once' ? ' once' : '/month'}</small></div>` : ''}
+          <p style="margin:6px 0 14px">${when}</p>
+          <div class="acct-acts">
+            ${o.can.change ? '<button class="btn primary small" id="chg">Change plan</button>' : ''}
+            ${o.can.pause ? '<button class="btn small" id="pause">Pause</button>' : ''}
+            ${o.can.resume ? '<button class="btn primary small" id="resume">Resume now</button>' : ''}
+            ${o.can.keep ? '<button class="btn primary small" id="keep">Keep my plan</button>' : ''}
+            ${o.can.card ? '<button class="btn small" id="card">Update card</button>' : ''}
+            ${o.can.cancel ? '<button class="btn small danger" id="cancel">Cancel</button>' : ''}
+          </div>
+          ${!o.subscription && !['CANCELLED', 'EXPIRED'].includes(o.status) && o.quote_no ? '<p class="fine">This is a custom order. Reply to your invoice email to change it.</p>' : ''}
+        </div>
+        <div class="card"><h3>Your system</h3><div class="kv">
+          <span>People</span><span>${o.seats ? esc(o.seats) : '—'}</span>
+          <span>LentOS</span><span>${esc(c.os || '—')}</span>
+          <span>Chip</span><span>${esc(c.chip || C.tiers[o.tier]?.chip || '—')}</span>
+          <span>Connection</span><span>${esc(c.connection || '—')}</span>
+          ${o.region ? `<span>Region</span><span>${esc(o.region)} · ${esc(C.regions[o.region] || '')}</span>` : ''}
+        </div>
+        <div class="fam-chips">${(o.models || []).map(m => `<span>${esc(m)}</span>`).join('')}</div>
+        <p class="fine" style="margin:10px 0 0">Redeem it in Nexus '28: Settings → Account → Redeem an order.</p></div>
+        ${o.referral_code && view.referral_enabled ? `<div class="card refcard"><h3>Give a month, get a month</h3>
+          <p style="margin:4px 0 10px">Share your code <b class="mono">${esc(o.referral_code)}</b>. A friend who uses it gets a month off; you get a month of credit on your next bill.</p>
+          <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn small" id="refcp">Copy my link</button>
+            <span class="muted" style="font-size:13.5px">${o.referrals ? `${o.referrals} friend${o.referrals === 1 ? '' : 's'} so far · ${money(Number(o.referral_credit) || 0)} credit` : 'No friends yet'}</span></div></div>` : ''}
+        <div class="card acct-inv"><h3>Invoices and receipts</h3>
+          ${view.invoices.length ? `<table class="mini"><tbody>${view.invoices.map(i => `<tr><td>${day(i.date)}</td><td>${esc(i.number || '')}</td><td>${money(i.amount)}${i.tax ? ` <span class="muted">(${money(i.tax)} tax)</span>` : ''}</td>
+            <td><span class="pill ${i.status === 'paid' ? 'ok' : i.status === 'open' ? 'warn' : 'dim'}">${esc(i.status)}</span></td>
+            <td class="r">${i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener">${i.status === 'open' ? 'Pay' : 'View'}</a>` : ''}${i.pdf ? ` · <a href="${esc(i.pdf)}" target="_blank" rel="noopener">PDF</a>` : ''}</td></tr>`).join('')}</tbody></table>`
+            : '<p class="muted" style="margin:0">No invoices to show yet. Your Stripe receipt email has the details.</p>'}</div>
+      </div>`;
+    const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+    on('out', () => { sessionStorage.removeItem('a3_portal'); me = null; view = null; $('view').hidden = true; $('find').closest('section').hidden = false; });
+    on('refcp', async e => { try { await navigator.clipboard.writeText(`${site}?ref=${o.referral_code}`); e.target.textContent = 'Copied ✓'; } catch { prompt('Copy your link:', `${site}?ref=${o.referral_code}`); } });
+    on('chg', changeSheet);
+    on('pause', pauseSheet);
+    on('resume', e => busy(e.target, 'Resuming…', async () => { try { view = await act('portal_resume'); render(); toast('Welcome back! Your plan is running again.', 'ok'); } catch (err) { toast(err.message, 'bad'); } }));
+    on('keep', e => busy(e.target, 'Keeping…', async () => { try { view = await act('portal_keep'); render(); toast("Great, you're staying. Nothing changes.", 'ok'); } catch (err) { toast(err.message, 'bad'); } }));
+    on('card', e => busy(e.target, 'Opening…', async () => { try { location.href = (await act('portal_card')).url; } catch (err) { toast(err.message, 'bad'); } }));
+    on('cancel', cancelSheet);
+  }
+
+  // ---------- change plan: pick → see the difference → confirm
+  function changeSheet() {
+    const o = view.order, sel = { plan: planKey(o.plan), tier: o.tier, billing: o.interval === 'year' ? 'year' : 'month' };
+    sheet(`<div class="kicker">Change plan</div><h3>Switch to…</h3>
+      <div class="seg" id="cp">${PLANS.filter(p => !C.plans[p].quote).map(p => `<button type="button" data-v="${p}">${esc(C.plans[p].name)}</button>`).join('')}</div>
+      <div class="seg" id="cb" style="margin-top:8px"><button type="button" data-v="month">Monthly</button><button type="button" data-v="year">Yearly (2 months free)</button></div>
+      <div class="cg" id="ct"></div>
+      <div class="totals" id="cq"><p class="muted" style="margin:0">Pick a plan to see the difference.</p></div>
+      <div class="err" id="cer"></div>
+      <div class="acts"><button type="button" class="btn quiet" data-close>Never mind</button><button type="button" class="btn primary" id="cok" disabled>Switch plan</button></div>`,
+      (el, close) => {
+        let quote = null;
+        const paint = () => {
+          el.querySelectorAll('#cp button').forEach(b => b.classList.toggle('on', b.dataset.v === sel.plan));
+          el.querySelectorAll('#cb button').forEach(b => b.classList.toggle('on', b.dataset.v === sel.billing));
+          el.querySelector('#ct').innerHTML = TIERS.map(t => { const p = price(sel.plan, t, sel.billing), cur = planKey(o.plan) === sel.plan && o.tier === t && (o.interval === 'year' ? 'year' : 'month') === sel.billing;
+            return `<button type="button" class="ctile ${t === sel.tier ? 'on' : ''}" data-t="${t}" ${cur ? 'disabled' : ''}><b>${esc(C.tiers[t].name)}</b><span>${money(p.amount)}/${p.interval === 'year' ? 'yr' : 'mo'}</span><small>${cur ? 'Your plan' : esc(C.tiers[t].chip)}</small></button>`; }).join('');
+          el.querySelectorAll('.ctile').forEach(b => b.onclick = () => { sel.tier = b.dataset.t; paint(); preview(); });
+        };
+        const preview = async () => {
+          quote = null; el.querySelector('#cok').disabled = true; el.querySelector('#cer').textContent = '';
+          const box = el.querySelector('#cq');
+          if (planKey(o.plan) === sel.plan && o.tier === sel.tier && (o.interval === 'year' ? 'year' : 'month') === sel.billing) { box.innerHTML = '<p class="muted" style="margin:0">That\'s your plan now.</p>'; return; }
+          box.innerHTML = '<p class="muted" style="margin:0"><span class="spin"></span> Working out the difference…</p>';
+          try {
+            quote = await act('portal_change', sel);
+            box.innerHTML = `<div><span>From</span><b>${esc(quote.from)}</b></div><div><span>To</span><b>${esc(quote.to)}</b></div>
+              ${quote.upgrade ? `<div class="t"><span>You pay now</span><b>${money(quote.due_now)}</b></div><div class="fine">That's the new price minus the time you've already paid for. Then ${money(quote.new_price)}/${quote.interval === 'year' ? 'year' : 'month'}.</div>`
+                : `<div class="t"><span>Credit on your next bill</span><b>${money(quote.credit)}</b></div><div class="fine">Nothing is charged now. From your next bill it's ${money(quote.new_price)}/${quote.interval === 'year' ? 'year' : 'month'}.</div>`}`;
+            el.querySelector('#cok').disabled = false; el.querySelector('#cok').textContent = quote.upgrade ? `Switch and pay ${money(quote.due_now)}` : 'Switch plan';
+          } catch (err) { box.innerHTML = ''; el.querySelector('#cer').textContent = err.message; }
+        };
+        el.querySelectorAll('#cp button').forEach(b => b.onclick = () => { sel.plan = b.dataset.v; paint(); preview(); });
+        el.querySelectorAll('#cb button').forEach(b => b.onclick = () => { sel.billing = b.dataset.v; paint(); preview(); });
+        el.querySelector('#cok').onclick = e => busy(e.target, 'Switching…', async () => {
+          try { const r = await act('portal_change', { ...sel, apply: true }); view = r; close(); render(); toast(`You're on ${r.to} now.${r.due_now ? ` ${money(r.due_now)} was charged to your card.` : ''}`, 'ok'); }
+          catch (err) { el.querySelector('#cer').textContent = err.message; }
+        });
+        paint();
+      });
+  }
+  function pauseSheet() {
+    let months = 1;
+    sheet(`<div class="kicker">Pause</div><h3>Take a break instead of cancelling</h3>
+      <p class="muted" style="margin:4px 0 12px">Nothing is charged while it's paused, and your models are off until it starts again. It restarts on its own, or you can resume early here.</p>
+      <div class="seg" id="pm">${[1, 2, 3].map(m => `<button type="button" data-m="${m}" class="${m === 1 ? 'on' : ''}">${m} month${m === 1 ? '' : 's'}</button>`).join('')}</div>
+      <p class="fine" id="pu" style="margin:10px 0 0"></p><div class="err" id="per"></div>
+      <div class="acts"><button type="button" class="btn quiet" data-close>Never mind</button><button type="button" class="btn primary" id="pok">Pause my plan</button></div>`,
+      (el, close) => {
+        const until = () => { const d = new Date(); d.setMonth(d.getMonth() + months); el.querySelector('#pu').textContent = `Starts again on ${day(d)}.`; };
+        el.querySelectorAll('#pm button').forEach(b => b.onclick = () => { months = +b.dataset.m; el.querySelectorAll('#pm button').forEach(x => x.classList.toggle('on', x === b)); until(); });
+        until();
+        el.querySelector('#pok').onclick = e => busy(e.target, 'Pausing…', async () => {
+          try { view = await act('portal_pause', { months }); close(); render(); toast('Paused. See you soon!', 'ok'); } catch (err) { el.querySelector('#per').textContent = err.message; }
+        });
+      });
+  }
+  function cancelSheet() {
+    const o = view.order;
+    sheet(`<div class="kicker">Cancel</div><h3>Cancel ${esc(o.plan)} ${esc(tierName(o.tier))}?</h3>
+      <p class="muted" style="margin:4px 0 0">It keeps working until <b>${day(o.current_period_end)}</b>, then stops renewing. You can change your mind here before then.</p>
+      ${o.can.pause ? '<p class="fine" style="margin:10px 0 0">Just need a break? <a href="#" id="ins">Pause for up to 3 months</a> instead.</p>' : ''}
+      <div class="err" id="xer"></div>
+      <div class="acts"><button type="button" class="btn quiet" data-close>Keep my plan</button><button type="button" class="btn danger" id="xok">Cancel at the end of the period</button></div>`,
+      (el, close) => {
+        const ins = el.querySelector('#ins'); if (ins) ins.onclick = e => { e.preventDefault(); close(); pauseSheet(); };
+        el.querySelector('#xok').onclick = e => busy(e.target, 'Cancelling…', async () => {
+          try { view = await act('portal_cancel'); close(); render(); toast(`Cancelled. It works until ${day(view.order.cancel_at)}.`); } catch (err) { el.querySelector('#xer').textContent = err.message; }
+        });
+      });
+  }
+
+  // ---------- claim a gift
+  let gift = null;
+  $('gift').onsubmit = e => e.preventDefault();
+  $('gcheck').onclick = e => busy(e.target, 'Checking…', async () => {
+    $('ger').textContent = '';
+    try { gift = (await post({ action: 'gift_check', code: $('gcode').value.trim() })).gift; showGift(); }
+    catch (err) { $('ger').textContent = err.message; }
+  });
+  function showGift() {
+    const g = gift, key = planKey(g.plan);
+    $('giftStep1').hidden = true; $('giftStep2').hidden = false;
+    if (g.claimed) { $('giftStep2').innerHTML = `<h3>This gift has already been claimed.</h3><p class="muted">If that was you, find it under <b>Find my order</b> with the email you used.</p>`; return; }
+    $('giftStep2').innerHTML = `<div class="giftcard"><div class="kicker">A gift for you 🎁</div><h3>${esc(g.plan)} ${esc(tierName(g.tier))} · ${g.months} month${g.months === 1 ? '' : 's'}</h3>
+        ${g.from_name ? `<p style="margin:4px 0 0">From <b>${esc(g.from_name)}</b></p>` : ''}${g.message ? `<blockquote>${esc(g.message)}</blockquote>` : ''}</div>
+      <p class="muted" style="margin:14px 0 0;font-size:14px">Add your details to claim it. Your months start now, and you'll get an order number to redeem in Nexus '28.</p>
+      <div id="gform">${window.A3forms.html(key)}</div>
+      <div class="err" id="ger2"></div>
+      <div class="acts"><button type="button" class="btn quiet" id="gback">Back</button><button type="button" class="btn primary" id="gclaim">Claim my gift</button></div>`;
+    window.A3forms.wire($('gform'), { os: C.os[0].id });
+    $('gback').onclick = () => { $('giftStep1').hidden = false; $('giftStep2').hidden = true; };
+    $('gclaim').onclick = e => busy(e.target, 'Claiming…', async () => {
+      $('ger2').textContent = '';
+      let customer; try { customer = window.A3forms.read($('gform'), key); } catch (err) { $('ger2').textContent = err.message; return; }
+      try {
+        const r = await post({ action: 'gift_claim', code: g.code, customer });
+        $('giftStep2').innerHTML = `<div class="kicker">It's yours</div><h3>Enjoy ${esc(g.plan)} ${esc(tierName(g.tier))}!</h3>
+          <p class="muted">Your order number:</p><div class="orderno" id="gno">${esc(r.order.order_id)}</div>
+          <p class="muted">It runs until <b>${day(r.order.expires_at)}</b>. Open Nexus '28 → Settings → Account → Redeem an order and paste the number. (<a href="${esc(CFG.nexusSite || 'https://apojidelegraphics.github.io/Nexus-28/')}">Get Nexus '28</a>)</p>
+          <button type="button" class="btn small" id="gcp">Copy order number</button>`;
+        $('gcp').onclick = async ev => { try { await navigator.clipboard.writeText(r.order.order_id); ev.target.textContent = 'Copied ✓'; } catch {} };
+        me = { order: r.order.order_id, email: customer.email }; sessionStorage.setItem('a3_portal', JSON.stringify(me));
+      } catch (err) { $('ger2').textContent = err.message; }
+    });
+  }
+
+  // ---------- arrive with ?gift=CODE (from the gift email), or with a remembered lookup
+  const q = new URLSearchParams(location.search);
+  if (q.get('gift')) { $('tabs').querySelector('[data-t=gift]').click(); $('gcode').value = q.get('gift').toUpperCase(); $('gcheck').click(); }
+  else if (q.get('order')) $('ono').value = q.get('order').toUpperCase();
+  else if (me) { $('ono').value = me.order; $('oem').value = me.email; post({ action: 'portal', ...me }).then(r => { view = r; render(); }).catch(() => sessionStorage.removeItem('a3_portal')); }
+})();
+</script>
+</body>
+</html>

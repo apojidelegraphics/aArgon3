@@ -32,7 +32,7 @@
   const avatar = (name, color, cls = '') => `<div class="av ${cls}" style="${color ? `background:${esc(color)}` : ''}">${esc(initials(name))}</div>`;
   const localInput = d => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 16); };
   const ymd = d => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 10); };
-  const statusPill = s => { s = String(s || '').toUpperCase(); return `<span class="pill ${s === 'ACTIVE' || s === 'PAID' || s === 'APPROVED' ? 'ok' : /CANCEL|REFUND|VOID|DENIED/.test(s) ? 'bad' : s === 'DRAFT' ? 'dim' : s === 'REQUESTED' ? 'info' : 'warn'}">${esc(s || '—')}</span>`; };
+  const statusPill = s => { s = String(s || '').toUpperCase(); return `<span class="pill ${s === 'ACTIVE' || s === 'PAID' || s === 'APPROVED' ? 'ok' : /CANCEL|REFUND|VOID|DENIED/.test(s) ? 'bad' : s === 'DRAFT' || s === 'EXPIRED' ? 'dim' : s === 'REQUESTED' ? 'info' : s === 'GIFT' ? 'vio' : 'warn'}">${esc(s || '—')}</span>`; };
   const roleName = r => ({ owner: 'Owner', manager: 'Manager', employee: 'Employee' }[r] || r);
   const tierName = t => C.tiers[t]?.name || (t ? t[0].toUpperCase() + t.slice(1) : '—');
   const big = n => money(Math.round(Number(n) || 0));
@@ -72,9 +72,11 @@
   const storeOptions = (selected, blank = false) => {
     const regions = {};
     for (const st of S.state?.stores || []) (regions[st.region] = regions[st.region] || []).push(st);
-    return (blank ? '<option value="">Any store</option>' : '') + Object.keys(regions).sort().map(r => `<optgroup label="Region ${esc(r)} · ${esc(C.regions[r] || '')}">${regions[r].map(st => `<option value="${esc(st.code)}" ${st.code === selected ? 'selected' : ''}>#${esc(st.code)} · ${esc(st.name)}</option>`).join('')}</optgroup>`).join('');
+    return (blank ? '<option value="">Any store</option>' : '') + Object.keys(regions).sort().map(r => `<optgroup label="Region ${esc(r)} · ${esc(C.regions[r] || '')}">${regions[r].map(st => `<option value="${esc(st.code)}" ${st.code === selected ? 'selected' : ''}>${storeNow(st.code)?.label === 'Closed today' ? '⛔ ' : ''}#${esc(st.code)} · ${esc(st.name)}</option>`).join('')}</optgroup>`).join('');
   };
   const storeRegion = code => (S.state?.stores || []).find(s => s.code === code)?.region;
+  const storeNow = code => S.hours?.stores?.find(x => x.code === code)?.now || null;
+  const t12 = hm => { const [h, m] = String(hm).split(':').map(Number); return `${h % 12 || 12}${m ? ':' + String(m).padStart(2, '0') : ''} ${h < 12 ? 'AM' : 'PM'}`; };
 
   // ================================================================ the staff function
   async function api(action, body = {}) {
@@ -95,6 +97,9 @@
     const before = S.overview?.today?.orders;
     const reqBefore = S.requests;
     S.me = r.user; S.state = r.state; S.overview = r.overview; S.requests = r.requests || 0;
+    const alertsBefore = S.alerts?.length;
+    S.alerts = r.alerts || []; S.alertDays = r.alert_days || 3; S.hours = r.hours || null;
+    if (alertsBefore === undefined && S.alerts.length && can('manager')) toast(`${S.alerts.length} custom order${S.alerts.length === 1 ? ' has' : 's have'} waited more than ${S.alertDays} days.`, '', () => go('today'));
     if (reqBefore != null && S.requests > reqBefore) { toast('New custom order request from the website.', 'ok', () => { quoteFilter = 'requested'; go('quotes'); }); desk?.attention?.(); } S.store = r.store || { open: true }; S.fetchedAt = Date.now();
     if (before != null && r.overview?.today?.orders > before && !S.sale) { toast(`New order! ${r.overview.today.orders} today.`, 'ok', () => go('orders')); desk?.attention?.(); }
     paintClock(); paintMe(); paintBadges();
@@ -260,7 +265,11 @@
     const long = s && (Date.now() - new Date(s.clock_in)) > 12 * 3600e3;
     const week = o.week || [], max = Math.max(1, ...week.map(d => Number(d.revenue) || 0));
     pg.innerHTML = `
-      ${S.store.open === false ? `<div class="banner">${ic('warning')}<div><b>The online store is closed.</b> ${esc(S.store.message || '')}</div>${can('owner') ? '<span style="flex:1"></span><button class="btn small" id="openStore">Open it</button>' : ''}</div>` : ''}
+      ${S.store.open === false ? `<div class="banner">${ic('warning')}<div><b>The online store is closed.</b> ${esc(S.store.message || '')}</div>${can('owner') && !S.store.closure ? '<span style="flex:1"></span><button class="btn small" id="openStore">Open it</button>' : ''}</div>` : ''}
+      ${(() => { const code = s?.store_code || myStore(), n = code && storeNow(code); return n && n.open === false && n.reason ? `<div class="banner">${ic('store')}<div><b>Store #${esc(code)} is closed today</b>: ${esc(n.reason)}.</div></div>` : n && n.open && n.closes ? `<div class="hoursline">${ic('store', 14)} #${esc(code)} is open until ${t12(n.closes)} today.</div>` : ''; })()}
+      ${can('manager') && S.alerts?.length ? `<div class="card alerts"><h3>${ic('warning')} Waiting too long <small>more than ${S.alertDays} day${S.alertDays === 1 ? '' : 's'}</small></h3>
+        ${S.alerts.slice(0, 6).map(a => `<button class="arow" data-q="${esc(a.quote_no)}"><span class="mono">${esc(a.quote_no)}</span><span>${a.enterprise ? '<span class="pill vio">ENTERPRISE</span> ' : ''}${esc(a.company || C.plans[a.plan]?.name || '')}</span><span class="muted">${esc(a.status)} · ${a.days} days</span></button>`).join('')}
+        ${S.alerts.length > 6 ? `<p class="muted" style="margin:6px 0 0;font-size:13px">and ${S.alerts.length - 6} more in Custom orders.</p>` : ''}</div>` : ''}
       ${long ? `<div class="banner"><div><b>Forgot to clock out?</b> You've been clocked in since ${fmtWhen(s.clock_in)}.</div>
         <span style="flex:1"></span><span class="muted">I left at</span><input class="field" type="datetime-local" id="leftAt" value="${localInput(Math.min(Date.now(), new Date(s.clock_in).getTime() + 8 * 3600e3))}">
         <button class="btn small" id="fix">Clock out at that time</button></div>` : ''}
@@ -287,6 +296,7 @@
           ${can('manager') && S.state?.pending_time_off ? `<button class="btn small" data-go="schedule">${ic('bell', 15)} ${S.state.pending_time_off} time-off request${S.state.pending_time_off === 1 ? '' : 's'}</button>` : ''}</div></div>
       </div>`;
     wireGate();
+    pg.querySelectorAll('.arow').forEach(b => b.onclick = async () => { go('quotes'); try { quoteView(await api('quote', { quote_no: b.dataset.q })); } catch (e) { toast(e.message, 'bad'); } });
     if ($('ptsmini')) api('points', { mine: true }).then(r => { const el = $('ptsmini'); if (!el) return;
       el.innerHTML = `<h3>${ic('star')} Your points</h3><div class="ptsbig ${r.mine.total < 0 ? 'neg' : ''}">${r.mine.total}</div><div class="muted" style="font-size:13px">${r.mine.month >= 0 ? '+' : ''}${r.mine.month} this month</div>
         ${r.history[0] ? `<div class="ptlast">${ptRow(r.history[0], true)}</div>` : ''}<button class="btn small quiet" data-go="points" style="margin-top:8px">See all ${ic('right', 14)}</button>`;
@@ -372,8 +382,9 @@
         <p class="muted">${label}${x.customer?.company ? ` · ${esc(x.customer.company)}` : ''}</p>
         <div class="orderno" id="no">${esc(x.order.order_id)}</div>
         <p class="muted">Tell ${esc(x.customer?.first || 'the customer')} to redeem it in Nexus '28: Settings → Account → Redeem an order. It's on their Stripe receipt too.</p>
-        <div class="row" style="justify-content:center"><button class="btn" id="cp">${ic('copy', 15)} Copy order number</button><button class="btn primary" id="again">${ic('plus', 15)} New sale</button></div></div>`;
+        <div class="row" style="justify-content:center"><button class="btn" id="cp">${ic('copy', 15)} Copy order number</button><button class="btn" id="rcpt">${ic('mail', 15)} Email receipt</button><button class="btn primary" id="again">${ic('plus', 15)} New sale</button></div></div>`;
       $('cp').onclick = () => copy(x.order.order_id);
+      $('rcpt').onclick = () => receiptSheet(x.order.order_id, x.customer?.email);
       $('again').onclick = () => { S.sale = null; draft.customer = {}; draft.promo = null; go('sale'); };
       return;
     }
@@ -457,11 +468,33 @@
         ${o.node_id ? `<span>Node</span><span class="mono">${esc(o.node_id)}</span>` : ''}${o.jurisdiction ? `<span>Jurisdiction</span><span>${esc(o.jurisdiction)}</span>` : ''}
         ${o.quote_no ? `<span>Quote</span><span class="mono">${esc(o.quote_no)}</span>` : ''}
         <span>Sold</span><span>${fmtWhen(o.created_at)} · ${esc(o.source === 'web' ? 'Online store' : `${o.operator || '—'}${o.store ? ', ' + o.store : ''}`)}</span>
-        ${o.notes ? `<span>Notes</span><span>${esc(o.notes)}</span>` : ''}</div>
+        ${o.notes ? `<span>Notes</span><span>${esc(o.notes)}</span>` : ''}
+        ${o.status === 'PAUSED' ? `<span>Paused</span><span>until ${fmtDay(o.paused_until)}</span>` : o.cancel_at && o.status !== 'CANCELLED' ? `<span>Ends</span><span>${fmtDay(o.cancel_at)} <span class="muted">(cancelling at the end of the period)</span></span>`
+          : o.current_period_end && o.subscription && o.status === 'ACTIVE' ? `<span>Renews</span><span>${fmtDay(o.current_period_end)}</span>` : ''}
+        ${o.expires_at ? `<span>${o.status === 'EXPIRED' ? 'Ended' : 'Runs until'}</span><span>${fmtDay(o.expires_at)}</span>` : ''}
+        ${o.region ? `<span>Region</span><span>${esc(o.region)} · ${esc(C.regions[o.region] || '')}${Number(o.tax) ? ` · ${money(o.tax)} tax` : ''}</span>` : ''}
+        ${o.gift ? `<span>Gift</span><span>${o.status === 'GIFT' ? `Not claimed yet · code <b class="mono">${esc(o.gift.code)}</b>` : `Claimed ${fmtDay(o.gift.claimed_at)}`} · ${o.gift.months} months for ${esc(o.gift.to_name || '')}${o.gift.from_name ? `, from ${esc(o.gift.from_name)}` : ''}</span>` : ''}
+        ${o.referral_code ? `<span>Referral code</span><span class="mono">${esc(o.referral_code)}${o.referrals ? ` <span class="muted">· ${o.referrals} friend${o.referrals === 1 ? '' : 's'}, ${money(o.referral_credit)} credit</span>` : ''}</span>` : ''}
+        ${o.referred_by ? `<span>Referred by</span><span class="mono">${esc(o.referred_by)}</span>` : ''}</div>
+      ${(o.history || []).length ? `<label class="lbl">History</label><div class="hist">${o.history.slice().reverse().map(h => `<div><span class="muted">${fmtWhen(h.at)}</span> ${esc(histText(h))}</div>`).join('')}</div>` : ''}
       <label class="lbl">Models</label><div class="chips">${(o.models || []).map(m => `<span>${esc(m)}</span>`).join('') || '<span>—</span>'}</div>
-      <div class="acts"><button class="btn quiet" id="cp">${ic('copy', 15)} Copy number</button>${can('manager') && active ? `<button class="btn danger" id="cx">Cancel</button>${o.subscription ? '<button class="btn danger" id="rf">Refund & cancel</button>' : ''}` : ''}<button class="btn primary" data-close>Close</button></div>`,
+      ${can('manager') && (o.can?.change || o.can?.pause || o.can?.resume || o.can?.cancel || o.can?.keep || o.can?.card) ? `<div class="oacts">
+        ${o.can.change ? `<button class="btn small" id="ochg">${ic('swap', 15)} Change plan</button>` : ''}${o.can.pause ? `<button class="btn small" id="opz">${ic('pause', 15)} Pause</button>` : ''}
+        ${o.can.resume ? `<button class="btn small primary" id="ors">${ic('play', 15)} Resume</button>` : ''}${o.can.cancel ? `<button class="btn small" id="oend">Cancel at period end</button>` : ''}
+        ${o.can.keep ? `<button class="btn small primary" id="okeep">Keep (undo cancel)</button>` : ''}${o.can.card ? `<button class="btn small" id="ocard">${ic('link', 15)} Card update link</button>` : ''}</div>` : ''}
+      <div class="acts"><button class="btn quiet" id="cp">${ic('copy', 15)} Copy number</button><button class="btn quiet" id="rcpt">${ic('mail', 15)} Email receipt</button>${can('manager') && (active || o.status === 'PAUSED') ? `<button class="btn danger" id="cx">Cancel now</button>${o.subscription ? '<button class="btn danger" id="rf">Refund & cancel</button>' : ''}` : ''}<button class="btn primary" data-close>Close</button></div>`,
       (el, close) => {
         el.querySelector('#cp').onclick = () => copy(o.order_id);
+        el.querySelector('#rcpt').onclick = () => { close(); receiptSheet(o.order_id, o.customer_email); };
+        const reopen = msg => { close(); toast(msg, 'ok'); loadOrders(); orderSheet(o.order_id); };
+        const on = (id, fn) => { const b = el.querySelector('#' + id); if (b) b.onclick = fn; };
+        on('ochg', () => { close(); changePlanSheet(o); });
+        on('opz', () => { close(); pauseOrderSheet(o); });
+        on('ors', e => busy(e.target, async () => { await api('order_resume', { order_id: o.order_id }); reopen('Resumed. Billing starts again.'); }).catch(() => {}));
+        on('oend', async () => { if (await confirmSheet('Cancel at the end of the period?', `It keeps working until ${fmtDay(o.current_period_end)}, then stops renewing. You (or the customer, on Your order) can undo it before then.`, 'Cancel at period end', true))
+          api('order_cancel_end', { order_id: o.order_id }).then(() => reopen('It will end at the end of the period.')).catch(err => toast(err.message, 'bad')); });
+        on('okeep', e => busy(e.target, async () => { await api('order_cancel_end', { order_id: o.order_id, undo: true }); reopen('Kept. It renews as normal.'); }).catch(() => {}));
+        on('ocard', e => busy(e.target, async () => { const r = await api('order_card_link', { order_id: o.order_id }); copy(r.url, 'Card update link copied. Send it to the customer.'); }).catch(() => {}));
         const act = refund => async () => {
           if (!(await confirmSheet(refund ? 'Refund and cancel?' : 'Cancel this order?', refund ? 'Refunds the last payment, ends the subscription now, and the order stops working in Nexus.' : 'Ends the subscription now (no refund), and the order stops working in Nexus.', refund ? 'Refund & cancel' : 'Cancel order', true))) return;
           const r = await api('cancel', { order_id: o.order_id, refund }).catch(err => { toast(err.message, 'bad'); return null; });
@@ -469,6 +502,57 @@
         };
         el.querySelector('#cx') && (el.querySelector('#cx').onclick = act(false));
         el.querySelector('#rf') && (el.querySelector('#rf').onclick = act(true));
+      });
+  }
+
+  const histText = h => ({ change: `Changed ${h.from} → ${h.to}${h.due_now ? `, charged ${money(h.due_now)}` : h.credit ? `, ${money(h.credit)} credit` : ''}`, pause: `Paused ${h.months} month${h.months === 1 ? '' : 's'}`,
+    resume: 'Resumed', cancel_at_end: 'Set to cancel at the end of the period', keep: 'Cancel undone', gift_bought: `Bought as a ${h.months}-month gift`, gift_claimed: `Gift claimed by ${h.by || 'them'}`, expired: 'Ended (gift months used up)' }[h.kind] || h.kind) + (h.by && !['gift_claimed'].includes(h.kind) ? ` · ${h.by}` : '');
+  function receiptSheet(orderId, email) {
+    sheet(`<div class="kicker">Receipt</div><h3>Email the receipt for ${esc(orderId)}</h3>
+      <p class="muted" style="margin:4px 0 0">Sent from ${esc(S.me ? 'aARgon3' : '')} with your store's name on it.</p>
+      <label class="lbl">Customer's email</label><input class="field" id="re" type="email" value="${esc(email || '')}" placeholder="name@example.com">
+      <div class="acts"><button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="ok">${ic('mail', 15)} Send receipt</button></div>`,
+      (el, close) => el.querySelector('#ok').onclick = e => busy(e.target, async () => {
+        const r = await api('receipt_email', { order_id: orderId, to: el.querySelector('#re').value.trim() }); close(); toast(`Receipt sent to ${r.to}.`, 'ok');
+      }).catch(() => {}));
+  }
+  function changePlanSheet(o) {
+    const sel = { plan: PLANS.find(k => C.plans[k].name === o.plan) || 'personal', tier: o.tier, billing: o.interval === 'year' ? 'year' : 'month' };
+    sheet(`<div class="kicker">Change plan · ${esc(o.order_id)}</div><h3>${esc(o.plan)} ${esc(tierName(o.tier))} → …</h3>
+      <div class="two"><div><label class="lbl">Plan</label><div class="seg" id="cpp">${PLANS.filter(p => !C.plans[p].quote).map(p => `<button data-v="${p}">${esc(C.plans[p].name)}</button>`).join('')}</div></div>
+        <div><label class="lbl">Billing</label><div class="seg" id="cpb"><button data-v="month">Monthly</button><button data-v="year">Yearly</button></div></div></div>
+      <label class="lbl">Tier</label><div class="seg" id="cpt">${TIERS.map(t => `<button data-v="${t}">${esc(C.tiers[t].name)}</button>`).join('')}</div>
+      <div class="kv" id="cpq" style="min-height:60px"></div>
+      <div class="acts"><button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="ok" disabled>Change plan</button></div>`,
+      (el, close) => {
+        let q = null;
+        const paint = () => { for (const [id, k] of [['cpp', 'plan'], ['cpb', 'billing'], ['cpt', 'tier']]) el.querySelectorAll(`#${id} button`).forEach(b => b.classList.toggle('on', b.dataset.v === sel[k])); };
+        const preview = async () => {
+          paint(); q = null; el.querySelector('#ok').disabled = true; el.querySelector('#cpq').innerHTML = '<span class="muted"><span class="spin"></span> Working it out…</span><span></span>';
+          try {
+            q = await api('order_change', { order_id: o.order_id, ...sel });
+            el.querySelector('#cpq').innerHTML = `<span>From</span><span>${esc(q.from)}</span><span>To</span><span><b>${esc(q.to)}</b> · ${money(q.new_price)}/${q.interval === 'year' ? 'yr' : 'mo'}</span>
+              <span>${q.upgrade ? 'Charged now' : 'Credit'}</span><span><b>${money(q.upgrade ? q.due_now : q.credit)}</b> <span class="muted">${q.upgrade ? 'to their saved card (minus unused time)' : 'off their next bill'}</span></span>`;
+            el.querySelector('#ok').disabled = false; el.querySelector('#ok').textContent = q.upgrade ? `Change and charge ${money(q.due_now)}` : 'Change plan';
+          } catch (err) { el.querySelector('#cpq').innerHTML = `<span></span><span class="err">${esc(err.message)}</span>`; }
+        };
+        for (const [id, k] of [['cpp', 'plan'], ['cpb', 'billing'], ['cpt', 'tier']]) el.querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => { sel[k] = b.dataset.v; preview(); });
+        paint();
+        el.querySelector('#ok').onclick = e => busy(e.target, async () => {
+          const r = await api('order_change', { order_id: o.order_id, ...sel, apply: true });
+          close(); toast(`${o.order_id} is now ${r.to}.${r.due_now ? ` Charged ${money(r.due_now)}.` : ''}`, 'ok'); loadOrders(); orderSheet(o.order_id);
+        }).catch(() => {});
+      });
+  }
+  function pauseOrderSheet(o) {
+    let m = 1;
+    sheet(`<div class="kicker">Pause · ${esc(o.order_id)}</div><h3>Pause billing for…</h3>
+      <div class="seg" id="pm">${[1, 2, 3].map(n => `<button data-v="${n}" class="${n === 1 ? 'on' : ''}">${n} month${n === 1 ? '' : 's'}</button>`).join('')}</div>
+      <p class="muted" style="font-size:13px">Nothing is charged while it's paused. It starts again on its own.</p>
+      <div class="acts"><button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="ok">${ic('pause', 15)} Pause</button></div>`,
+      (el, close) => {
+        el.querySelectorAll('#pm button').forEach(b => b.onclick = () => { m = +b.dataset.v; el.querySelectorAll('#pm button').forEach(x => x.classList.toggle('on', x === b)); });
+        el.querySelector('#ok').onclick = e => busy(e.target, async () => { await api('order_pause', { order_id: o.order_id, months: m }); close(); toast(`Paused for ${m} month${m === 1 ? '' : 's'}.`, 'ok'); loadOrders(); orderSheet(o.order_id); }).catch(() => {});
       });
   }
 
@@ -489,7 +573,7 @@
     const pg = $('pg'), mgr = can('manager');
     const end = new Date(weekStart.getTime() + 7 * 864e5), days = [...Array(7)].map((_, i) => new Date(weekStart.getTime() + i * 864e5));
     pg.innerHTML = `<div class="h-row"><button class="btn small" id="prev">${ic('left', 15)}</button><h3>${weekStart.toLocaleDateString([], { month: 'short', day: 'numeric' })} – ${new Date(end - 864e5).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</h3><button class="btn small" id="next">${ic('right', 15)}</button><button class="btn quiet small" id="thisWeek">This week</button>
-      <span class="sp"></span>${mgr ? `<button class="btn small" id="copyWeek">${ic('copy', 15)} Copy to next week</button><button class="btn small" id="timeoff">${ic('bell', 15)} Time off${S.state?.pending_time_off ? ` (${S.state.pending_time_off})` : ''}</button><button class="btn primary small" id="add">${ic('plus', 15)} Add shift</button>`
+      <span class="sp"></span>${mgr ? `<button class="btn small" id="copyWeek">${ic('copy', 15)} Copy to next week</button><button class="btn small" id="clos">${ic('store', 15)} Closures</button><button class="btn small" id="timeoff">${ic('bell', 15)} Time off${S.state?.pending_time_off ? ` (${S.state.pending_time_off})` : ''}</button><button class="btn primary small" id="add">${ic('plus', 15)} Add shift</button>`
         : `<button class="btn small" id="timeoff">${ic('calendarx', 15)} Ask for time off</button>`}</div>
       <div id="grid"><div class="empty"><span class="spin"></span></div></div>
       <p class="muted" style="font-size:13px;margin-top:10px">${mgr ? 'Click an empty day to add a shift, or a shift to change it. Striped days are approved time off.' : 'Your shifts are purple. Ask a manager to change them.'}</p>`;
@@ -497,6 +581,7 @@
     $('next').onclick = () => { weekStart = new Date(weekStart.getTime() + 7 * 864e5); pageSchedule(); };
     $('thisWeek').onclick = () => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); weekStart = d; pageSchedule(); };
     $('timeoff').onclick = mgr ? timeOffReview : timeOffSheet;
+    $('clos') && ($('clos').onclick = closuresSheet);
     let shifts, team = [], off = [];
     try {
       [shifts, team, off] = await Promise.all([api('schedule', { from: weekStart.toISOString(), to: end.toISOString() }), mgr ? api('team') : Promise.resolve([]), api('timeoff', { everyone: mgr })]);
@@ -647,7 +732,10 @@
       <div class="grid3" style="margin-top:12px">${split('By plan', d.by_plan || [])}${split('By tier', d.by_tier || [], x => tierName(x.key))}${split('Where it sold', d.by_source || [], x => ({ web: 'Online store', terminal: 'Terminal', comp: 'Free (comp)', custom: 'Custom orders', legacy: 'Old terminal' }[x.key] || x.key))}</div>
       ${!salesMine && mgr ? `<div class="grid2" style="margin-top:12px"><div class="card rank"><h3>Top sellers</h3><div class="split">${(d.top_staff || []).map(x => `<div class="r"><span>${esc(x.name)} <span class="muted">· ${x.orders}</span></span><span>${big(x.revenue)}</span></div>`).join('') || '<p class="muted">Nothing yet.</p>'}</div></div>
         <div class="card rank"><h3>Top stores</h3><div class="split">${(d.top_stores || []).map(x => `<div class="r"><span>${esc(x.name)} <span class="muted">· ${x.orders}</span></span><span>${big(x.revenue)}</span></div>`).join('') || '<p class="muted">Nothing yet.</p>'}</div></div></div>` : ''}
+      ${!salesMine && mgr ? `<div class="grid2" style="margin-top:12px"><div class="card" id="refs"><h3>${ic('gift')} Referrals</h3><div class="empty"><span class="spin"></span></div></div>
+        <div class="card" id="abd"><h3>${ic('mail')} Checkout reminders</h3><div class="empty"><span class="spin"></span></div></div></div>` : ''}
       <p class="muted" style="font-size:12.5px;margin-top:12px">Counts every payment, including monthly and yearly renewals since 2.1. Refunded orders don't count. Old-terminal orders count at the price they were rung up for.${a.first_order ? ` First order: ${fmtDate(a.first_order)}.` : ''}</p>`;
+    salesExtras();
   }
 
   // ================================================================ Profile
@@ -848,6 +936,15 @@
     }
     draw();
   }
+  function salesExtras() {
+    const need = e => `<p class="muted" style="margin:0">${/function|not find|2\.4/i.test(e.message) ? 'Needs the 2.4 database update.' : esc(e.message)}</p>`;
+    if ($('refs')) api('referrals').then(l => { const el = $('refs'); if (!el) return;
+      el.innerHTML = `<h3>${ic('gift')} Referrals <small>${l.length}</small></h3><div class="split">${l.slice(0, 8).map(r => `<div class="r"><span><span class="mono">${esc(r.code)}</span> <span class="muted">· ${esc(r.referrer_name || r.referrer_order)} → ${esc(r.new_order)}</span></span><span>${r.status === 'credited' ? money(r.credit_cents / 100) : `<span class="pill ${r.status === 'limit' ? 'dim' : 'warn'}">${esc(r.status)}</span>`}</span></div>`).join('') || '<p class="muted" style="margin:0">No referrals yet. Every order gets a code to share.</p>'}</div>`; })
+      .catch(e => { const el = $('refs'); if (el) el.innerHTML = `<h3>${ic('gift')} Referrals</h3>${need(e)}`; });
+    if ($('abd')) api('abandoned').then(l => { const el = $('abd'); if (!el) return;
+      el.innerHTML = `<h3>${ic('mail')} Checkout reminders <small>${l.filter(a => a.recovered).length} came back</small></h3><div class="split">${l.slice(0, 8).map(a => `<div class="r"><span>${esc(a.email)} <span class="muted">· ${esc(a.label || '')}</span></span><span>${a.recovered ? '<span class="pill ok">BOUGHT</span>' : a.emailed_at ? '<span class="pill info">REMINDED</span>' : `<span class="pill bad" title="${esc(a.email_error || '')}">NOT SENT</span>`}</span></div>`).join('') || '<p class="muted" style="margin:0">Only people who tick "remind me" at checkout get one email if they don\'t finish.</p>'}</div>`; })
+      .catch(e => { const el = $('abd'); if (el) el.innerHTML = `<h3>${ic('mail')} Checkout reminders</h3>${need(e)}`; });
+  }
   function quoteView(q) {
     const c = q.customer || {}, pg = $('pg');
     pg.innerHTML = `<div class="h-row"><button class="btn quiet small" id="back">${ic('left', 15)} Custom orders</button><h3 class="mono">${esc(q.quote_no)}</h3>${statusPill(q.status)}<span class="sp"></span>
@@ -1000,6 +1097,7 @@
     pg.innerHTML = '<div class="empty"><span class="spin"></span></div>';
     let d; try { d = await api('settings'); } catch (e) { pg.innerHTML = `<div class="empty-card">${esc(e.message)}</div>`; return; }
     const s = d.settings || {}, st = s.store || {}, biz = s.business || {}, goals = s.goals || {};
+    const tax = s.tax || {}, em = s.email || {}, ref = s.referral || {}, fu = s.followup || {}, al = s.alerts || {}, def = d.email_defaults || {};
     pg.innerHTML = `<div class="grid2">
       <form class="card" id="fs"><h3>${ic('store')} Online store</h3><label class="switch"><input type="checkbox" id="open" ${st.open !== false ? 'checked' : ''}> Taking orders</label>
         <label class="lbl">Message when closed</label><input class="field" id="msg" value="${esc(st.message || '')}" placeholder="e.g. Back Monday! Staff sales still work.">
@@ -1010,26 +1108,86 @@
         <div><label class="lbl">Business name</label><input class="field" id="bn" value="${esc(biz.name || '')}"></div><div><label class="lbl">Support email</label><input class="field" id="be" type="email" value="${esc(biz.support_email || '')}"></div>
         <div><label class="lbl">Address</label><input class="field" id="ba" value="${esc(biz.address || '')}"></div><div><label class="lbl">Phone</label><input class="field" id="bp" value="${esc(biz.phone || '')}"></div></div>
         <div class="acts"><button class="btn primary">Save</button></div></form>
+      <div class="grid2" style="margin-top:12px">
+        <form class="card" id="ftax"><h3>${ic('percent')} Tax by region</h3><label class="switch"><input type="checkbox" id="tx" ${tax.enabled ? 'checked' : ''}> Add tax at checkout and on invoices</label>
+          <label class="lbl">Name on receipts</label><input class="field" id="tl" value="${esc(tax.label || 'Sales tax')}" maxlength="50">
+          <div class="taxgrid">${Object.keys(C.regions).map(r => `<label><span><b>${r}</b> ${esc(C.regions[r])}</span><div class="pct-in"><input class="field" type="number" min="0" max="30" step="0.001" data-r="${r}" value="${tax.regions?.[r]?.rate ?? ''}" placeholder="0"></div></label>`).join('')}</div>
+          <p class="muted" style="font-size:12.5px">Customers pick their region at checkout; terminal sales use the store's region. Each rate becomes a Stripe tax rate, so it shows on receipts and invoices. Ask an accountant which rates apply to you.</p>
+          <div class="acts"><button class="btn primary">Save</button></div></form>
+        <form class="card" id="fem"><h3>${ic('mail')} Email (EmailJS)</h3><label class="switch"><input type="checkbox" id="ee" ${em.enabled !== false ? 'checked' : ''}> Send emails</label>
+          <div class="fgrid"><div><label class="lbl">Service id</label><input class="field mono" id="es" value="${esc(em.service_id || '')}" placeholder="${esc(def.service_id || '')}"></div>
+            <div><label class="lbl">Public key</label><input class="field mono" id="ek" value="${esc(em.public_key || '')}" placeholder="${esc(def.public_key || '')}"></div>
+            <div><label class="lbl">Receipt template</label><input class="field mono" id="er" value="${esc(em.receipt_template || '')}" placeholder="${esc(def.receipt_template || '')}"></div>
+            <div><label class="lbl">Gift + reminder template</label><input class="field mono" id="emt" value="${esc(em.message_template || '')}" placeholder="template_…"></div></div>
+          <p class="muted" style="font-size:12.5px">Blank = the old aARgon3 account's ids. Receipts use your existing template. Gifts and checkout reminders need a second template: paste <span class="mono">emails/message-template.html</span> into a new EmailJS template and put its id here. In EmailJS, turn on Account → Security → "Allow EmailJS API for non-browser applications".${d.has_private_key ? ' Private key: set.' : ''}</p>
+          <div class="acts"><button type="button" class="btn quiet" id="etest">${ic('mail', 15)} Send me a test</button><button class="btn primary">Save</button></div></form>
+      </div>
+      <form class="card" id="fmore" style="margin-top:12px"><h3>${ic('gift')} Referrals, reminders and alerts</h3><div class="fgrid">
+        <div><label class="switch"><input type="checkbox" id="re" ${ref.enabled !== false ? 'checked' : ''}> Referral codes</label><p class="muted" style="font-size:12.5px;margin:4px 0 0">A friend gets a month off; the person who shared the code gets a month of credit.</p></div>
+        <div><label class="lbl">Credits per customer per year</label><input class="field" id="rm" type="number" min="1" max="100" value="${ref.max_per_year || 12}"></div>
+        <div><label class="switch"><input type="checkbox" id="fu" ${fu.enabled !== false ? 'checked' : ''}> Checkout reminders</label><p class="muted" style="font-size:12.5px;margin:4px 0 0">One email, only to people who tick "remind me" and don't finish.</p></div>
+        <div><label class="lbl">Alert when a custom order waits more than (days)</label><input class="field" id="ad" type="number" min="1" max="60" value="${al.quote_days || 3}"></div></div>
+        <div class="acts"><button class="btn primary">Save</button></div></form>
       <div class="card" style="margin-top:12px"><div class="h-row"><h3>${ic('store')} Stores</h3><span class="sp"></span><button class="btn small" id="addStore">${ic('plus', 15)} Add store</button></div>
-        <table class="tbl"><thead><tr><th>Store</th><th>Region</th><th>Status</th><th></th></tr></thead><tbody>${(d.stores || []).map((x, i) => `<tr><td><b class="mono">#${esc(x.code)}</b> ${esc(x.name)}</td><td class="muted">${esc(x.region)} · ${esc(C.regions[x.region] || '')}</td><td>${x.active ? '<span class="pill ok">OPEN</span>' : '<span class="pill dim">CLOSED</span>'}</td><td class="num"><button class="btn quiet small" data-i="${i}">${ic('edit', 15)}</button></td></tr>`).join('')}</tbody></table></div>`;
+        <table class="tbl"><thead><tr><th>Store</th><th>Region</th><th>Hours</th><th>Status</th><th></th></tr></thead><tbody>${(d.stores || []).map((x, i) => `<tr><td><b class="mono">#${esc(x.code)}</b> ${esc(x.name)}</td><td class="muted">${esc(x.region)} · ${esc(C.regions[x.region] || '')}</td><td class="muted">${x.hours ? hoursSummary(x.hours) : 'Not set'}</td><td>${x.active ? '<span class="pill ok">OPEN</span>' : '<span class="pill dim">CLOSED</span>'}</td><td class="num"><button class="btn quiet small" data-i="${i}">${ic('edit', 15)}</button></td></tr>`).join('')}</tbody></table></div>`;
     const ro = !can('owner');
-    if (ro) pg.querySelectorAll('input, button.btn.primary, #addStore, [data-i]').forEach(x => x.disabled = true);
+    if (ro) pg.querySelectorAll('input, select, button.btn.primary, #addStore, #etest, [data-i]').forEach(x => x.disabled = true);
     const save = (key, value) => api('settings_save', { key, value }).then(() => { toast('Saved.', 'ok'); return refresh(); });
     $('fs').onsubmit = e => { e.preventDefault(); busy(e.submitter, () => save('store', { open: $('open').checked, message: $('msg').value })).catch(() => {}); };
     $('fg').onsubmit = e => { e.preventDefault(); busy(e.submitter, () => save('goals', { monthly_revenue: Number($('goal').value) || 0 })).catch(() => {}); };
     $('fb').onsubmit = e => { e.preventDefault(); busy(e.submitter, () => save('business', { name: $('bn').value, support_email: $('be').value, address: $('ba').value, phone: $('bp').value })).catch(() => {}); };
+    $('ftax').onsubmit = e => { e.preventDefault(); busy(e.submitter, () => save('tax', { enabled: $('tx').checked, label: $('tl').value,
+      regions: Object.fromEntries([...pg.querySelectorAll('[data-r]')].map(i => [i.dataset.r, { rate: Number(i.value) || 0 }])) }).then(() => pageSettings())).catch(() => {}); };
+    $('fem').onsubmit = e => { e.preventDefault(); busy(e.submitter, () => save('email', { enabled: $('ee').checked, service_id: $('es').value, public_key: $('ek').value, receipt_template: $('er').value, message_template: $('emt').value }))
+      .catch(err => toast(err.message, 'bad')); };
+    $('etest').onclick = e => busy(e.target, async () => { const r = await api('email_test'); toast(`Test to ${r.to}: receipt ${r.receipt === 'sent' ? '✓ sent' : `✗ ${r.receipt}`} · gift/reminder ${r.message === 'sent' ? '✓ sent' : `✗ ${r.message}`}`, r.receipt === 'sent' && r.message === 'sent' ? 'ok' : 'bad'); }).catch(() => {});
+    $('fmore').onsubmit = e => { e.preventDefault(); busy(e.submitter, async () => {
+      await api('settings_save', { key: 'referral', value: { enabled: $('re').checked, max_per_year: Number($('rm').value) || 12 } });
+      await api('settings_save', { key: 'followup', value: { enabled: $('fu').checked } });
+      await save('alerts', { quote_days: Number($('ad').value) || 3 });
+    }).catch(() => {}); };
     const storeSheet = x => sheet(`<div class="kicker">Stores</div><h3>${x ? `#${esc(x.code)}` : 'Add a store'}</h3>
       <div class="fgrid"><div><label class="lbl">Store number</label><input class="field" id="sc" maxlength="4" value="${esc(x?.code || '')}" ${x ? 'disabled' : ''} placeholder="4 digits"></div>
       <div><label class="lbl">Region</label><select class="field" id="sr">${Object.keys(C.regions).map(r => `<option value="${r}" ${x?.region === r ? 'selected' : ''}>${r} · ${esc(C.regions[r])}</option>`).join('')}</select></div>
       <div class="wide"><label class="lbl">Name</label><input class="field" id="sn" value="${esc(x?.name || '')}"></div></div>
       ${x ? `<label class="switch" style="margin-top:14px"><input type="checkbox" id="sa" ${x.active ? 'checked' : ''}> Open (staff can clock in here)</label>` : ''}
+      <label class="lbl">Opening hours <span style="opacity:.6">(Eastern time; shown on the Stores page)</span></label>
+      <label class="switch" style="margin-bottom:6px"><input type="checkbox" id="hon" ${x?.hours ? 'checked' : ''}> Post hours for this store</label>
+      <div class="hedit" id="hed" ${x?.hours ? '' : 'hidden'}>${DAYS7.map(([k, l]) => { const h = x?.hours?.[k]; return `<div class="hrow" data-d="${k}"><span>${l}</span><label class="mini"><input type="checkbox" class="hopen" ${!x?.hours || h ? 'checked' : ''}> Open</label>
+        <input class="field" type="time" value="${h?.[0] || '09:00'}"><span class="muted">to</span><input class="field" type="time" value="${h?.[1] || (k === 'sun' ? '17:00' : '21:00')}"></div>`; }).join('')}</div>
       <div class="acts"><button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="ok">Save</button></div>`,
-      (el, close) => el.querySelector('#ok').onclick = e => busy(e.target, async () => {
+      (el, close) => { el.querySelector('#hon').onchange = ev => el.querySelector('#hed').hidden = !ev.target.checked; el.querySelector('#ok').onclick = e => busy(e.target, async () => {
         await api('store_save', { code: el.querySelector('#sc').value, name: el.querySelector('#sn').value, region: el.querySelector('#sr').value, active: x ? el.querySelector('#sa').checked : true });
+        const hours = el.querySelector('#hon').checked ? Object.fromEntries([...el.querySelectorAll('.hrow')].map(r => { const t = r.querySelectorAll('input[type=time]'); return [r.dataset.d, r.querySelector('.hopen').checked ? [t[0].value, t[1].value] : null]; })) : null;
+        if (x?.hours || hours) await api('store_hours', { code: el.querySelector('#sc').value, hours });
         close(); toast('Store saved.', 'ok'); await refresh(); pageSettings();
-      }).catch(() => {}));
+      }).catch(() => {}); });
     $('addStore').onclick = () => storeSheet(null);
     pg.querySelectorAll('[data-i]').forEach(b => b.onclick = () => storeSheet(d.stores[+b.dataset.i]));
+  }
+
+  const DAYS7 = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
+  const hoursSummary = h => { const wk = DAYS7.slice(0, 5).map(([k]) => h[k]), same = wk.every(x => JSON.stringify(x) === JSON.stringify(wk[0]));
+    return same && wk[0] ? `Mon–Fri ${t12(wk[0][0])}–${t12(wk[0][1])}` : `Mon ${h.mon ? `${t12(h.mon[0])}–${t12(h.mon[1])}` : 'closed'} · …`; };
+  // ================================================================ closures (managers): days a store, or the online store, is closed
+  async function closuresSheet() {
+    let d; try { d = await api('stores_public'); } catch (e) { return toast(/function|not find|2\.4/i.test(e.message) ? 'Closures need the 2.4 database update.' : e.message, 'bad'); }
+    const name = c => c.store_code ? `#${c.store_code} ${(d.stores.find(x => x.code === c.store_code) || {}).name || ''}` : 'Online store';
+    const today = ymd(new Date());
+    sheet(`<div class="kicker">Closures</div><h3>Days we're closed</h3>
+      <p class="muted" style="margin:4px 0 0;font-size:13.5px">They show on the Stores page and in the terminal. An <b>online store</b> closure stops website checkouts on those days.</p>
+      <div class="clist">${d.closures.filter(c => c.ends_on >= today).map(c => `<div class="crow"><div><b>${esc(name(c))}</b><small>${fmtDay(c.starts_on + 'T12:00')}${c.ends_on !== c.starts_on ? ` – ${fmtDay(c.ends_on + 'T12:00')}` : ''}${c.reason ? ` · ${esc(c.reason)}` : ''}</small></div><button class="btn quiet small" data-del="${c.id}">Remove</button></div>`).join('') || '<p class="muted">Nothing on the calendar.</p>'}</div>
+      <div class="fgrid" style="margin-top:10px"><div class="wide"><label class="lbl">Where</label><select class="field" id="cs"><option value="">Online store (website checkouts)</option>${storeOptions('', false)}</select></div>
+        <div><label class="lbl">From</label><input class="field" id="cf" type="date" value="${today}"></div><div><label class="lbl">To</label><input class="field" id="ct" type="date" value="${today}"></div>
+        <div class="wide"><label class="lbl">Why</label><input class="field" id="cr" maxlength="120" placeholder="e.g. Thanksgiving, inventory day"></div></div>
+      <div class="acts"><button class="btn quiet" data-close>Done</button><button class="btn primary" id="ok">${ic('plus', 15)} Add closure</button></div>`,
+      (el, close) => {
+        el.querySelectorAll('[data-del]').forEach(b => b.onclick = e => busy(e.target, async () => { await api('closure_delete', { id: +b.dataset.del }); close(); await refresh(); closuresSheet(); }).catch(() => {}));
+        el.querySelector('#ok').onclick = e => busy(e.target, async () => {
+          await api('closure_save', { store_code: el.querySelector('#cs').value, starts_on: el.querySelector('#cf').value, ends_on: el.querySelector('#ct').value, reason: el.querySelector('#cr').value });
+          close(); toast('Closure added.', 'ok'); await refresh(); closuresSheet();
+        }).catch(() => {});
+      });
   }
 
   // ================================================================ start

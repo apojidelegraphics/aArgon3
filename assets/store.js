@@ -6,7 +6,11 @@
   const CFG = window.A3_CONFIG;
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const st = { plan: 'personal', billing: 'month', closed: false, closedMsg: '' };
+  const st = { plan: 'personal', billing: 'month', closed: false, closedMsg: '', info: null };
+  const store = { get: k => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+  const GIFT_MONTHS = [1, 3, 6, 12];
+  const giftCents = (sel, m) => m === 12 ? price(sel.plan, sel.tier, 'year').cents : price(sel.plan, sel.tier, 'month').cents * m;
+  const taxRate = r => st.info?.tax?.rates?.[r] || 0;
   const mailto = (subject, body = '') => `mailto:${C.contactEmail}?subject=${encodeURIComponent(subject)}${body ? '&body=' + encodeURIComponent(body) : ''}`;
 
   function toast(msg, kind = '') {
@@ -153,25 +157,56 @@
       <h3>${sel.plan === 'personal' ? 'Who is this for?' : 'Who is placing this order?'}</h3>
       <p class="muted" style="margin:4px 0 0;font-size:14px">${sel.plan === 'personal' ? 'We put this on your order so we can help you later.' : 'We put your business details on the order and your receipts.'}</p>
       ${window.A3forms.html(sel.plan)}
-      <label class="lbl">Promo code <span style="opacity:.6">(optional)</span></label>
-      <div class="promo-row"><input class="field" id="promo" placeholder="CODE" autocomplete="off" maxlength="30"><button type="button" class="btn small" id="apply">Apply</button></div>
+      <label class="lbl">Your region <span style="opacity:.6">${st.info?.tax ? '(for tax)' : '(optional)'}</span></label>
+      <select class="field" id="region"><option value="">Choose your region</option>${Object.entries(C.regions).map(([k, v]) => `<option value="${k}" ${store.get('a3_region') === k ? 'selected' : ''}>${k} · ${esc(v)}</option>`).join('')}</select>
+      <label class="check gift-tog"><input type="checkbox" id="isGift"><span><b>🎁 Send this as a gift</b><small>Pay once for 1 to 12 months. They get a code to claim it, and the months start when they do.</small></span></label>
+      <div class="giftbox" id="giftBox" hidden>
+        <label class="lbl">How long</label><div class="seg" id="gm">${GIFT_MONTHS.map(m => `<button type="button" data-m="${m}" class="${m === 3 ? 'on' : ''}">${m} mo<small>${money(giftCents(sel, m) / 100)}</small></button>`).join('')}</div>
+        <div class="two"><div><label class="lbl">Their name</label><input class="field" id="gName" maxlength="80" placeholder="Who it's for"></div>
+          <div><label class="lbl">Their email <span style="opacity:.6">(optional)</span></label><input class="field" id="gEmail" type="email" maxlength="120" placeholder="We'll email them the code"></div></div>
+        <label class="lbl">A note <span style="opacity:.6">(optional)</span></label><textarea class="field" id="gMsg" rows="2" maxlength="300" placeholder="Happy birthday!"></textarea>
+        <p class="fine" style="margin:6px 0 0">No email? We'll send the code to you, and it's on the next page too.</p>
+      </div>
+      <label class="lbl">Promo or referral code <span style="opacity:.6">(optional)</span></label>
+      <div class="promo-row"><input class="field" id="promo" placeholder="CODE or REF-XXXXXX" autocomplete="off" maxlength="30"><button type="button" class="btn small" id="apply">Apply</button></div>
       <div class="promo-ok" id="promoOk"></div>
+      <div class="totals" id="tot"></div>
+      <label class="check"><input type="checkbox" id="remind"><span><small>Email me one reminder if I don't finish checking out. Just one, and only for this order.</small></span></label>
       <div class="err" id="er"></div>
       <div class="acts"><button type="button" class="btn quiet" id="back">Back</button><button class="btn primary" id="go">Continue to payment</button></div>
       <div class="secure">🔒 Secure payment by Stripe · your order number comes right after</div>
     </form>`);
     const f1 = wrap.querySelector('#setup'), f2 = wrap.querySelector('#who');
     window.A3forms.wire(f2, { os: () => sel.os });
+    const ref = store.get('a3_ref');
+    if (ref) f2.querySelector('#promo').value = ref;
     f1.onsubmit = e => { e.preventDefault(); sel.os = f1.os.value; sel.connection = f1.connection.value; f1.hidden = true; f2.hidden = false; f2.querySelector('[data-f]')?.focus(); };
     f2.querySelector('#back').onclick = () => { f2.hidden = true; f1.hidden = false; };
-    const amt = () => f1.querySelector('#amt').innerHTML = promo ? `<s class="muted" style="font-size:14px">${money(p.amount)}</s> ${money(promo.after)}<small>/${per}</small>` : `${money(p.amount)}<small>/${per}</small>`;
+    let giftM = 3;
+    const isGift = () => f2.querySelector('#isGift').checked;
+    // what they'll pay today: plan (or gift) − code + tax for their region
+    const amt = () => {
+      f1.querySelector('#amt').innerHTML = promo ? `<s class="muted" style="font-size:14px">${money(p.amount)}</s> ${money(promo.after)}<small>/${per}</small>` : `${money(p.amount)}<small>/${per}</small>`;
+      const base = isGift() ? giftCents(sel, giftM) / 100 : p.amount, after = promo && !isGift() ? promo.after : base;
+      const r = f2.querySelector('#region').value, rate = taxRate(r), tax = Math.round(after * rate) / 100;
+      f2.querySelector('#tot').innerHTML = `<div><span>${isGift() ? `Gift · ${giftM} month${giftM === 1 ? '' : 's'}, paid once` : `${esc(C.plans[sel.plan].name)} ${esc(C.tiers[sel.tier].name)} · ${per === 'year' ? 'yearly' : 'monthly'}`}</span><b>${money(base)}</b></div>
+        ${promo && !isGift() ? `<div class="off"><span>${esc(promo.code)}</span><b>−${money(Math.round((base - after) * 100) / 100)}</b></div>` : ''}
+        ${rate ? `<div><span>${esc(st.info.tax.label)} (${rate}%)</span><b>${money(tax)}</b></div>` : ''}
+        <div class="t"><span>Today</span><b>${money(Math.round((after + tax) * 100) / 100)}</b></div>
+        ${!isGift() && promo ? `<div class="fine">Then ${money(p.amount)}${rate ? ' + tax' : ''} a ${per}${promo.duration === 'forever' ? ` (${money(promo.after)} with your code)` : ''}.</div>` : ''}`;
+    };
+    f2.querySelector('#region').onchange = e => { store.set('a3_region', e.target.value); amt(); };
+    f2.querySelector('#isGift').onchange = () => { f2.querySelector('#giftBox').hidden = !isGift(); f2.querySelector('#remind').closest('label').hidden = false; amt(); if (isGift()) f2.querySelector('#gName').focus(); };
+    f2.querySelectorAll('#gm button').forEach(b => b.onclick = () => { giftM = +b.dataset.m; f2.querySelectorAll('#gm button').forEach(x => x.classList.toggle('on', x === b)); amt(); });
+    amt();
     f2.querySelector('#promo').oninput = () => { if (promo) { promo = null; f2.querySelector('#promoOk').textContent = ''; amt(); } };
     f2.querySelector('#apply').onclick = async e => {
       const code = f2.querySelector('#promo').value.trim(), ok = f2.querySelector('#promoOk'), er = f2.querySelector('#er');
       er.textContent = ''; ok.textContent = '';
       if (!code) return;
       e.target.disabled = true;
-      try { promo = await post('checkout', { action: 'promo', code, ...sel }); ok.textContent = `✓ ${promo.code}: ${promo.label}. ${money(promo.after)} instead of ${money(promo.before)}.`; amt(); }
+      const email = f2.querySelector('[data-f=email]')?.value || '';
+      try { promo = await post('checkout', { action: 'promo', code, email, ...sel }); ok.textContent = `✓ ${promo.code}: ${promo.label}.`; amt(); }
       catch (err) { promo = null; er.textContent = err.message; }
       e.target.disabled = false;
     };
@@ -179,10 +214,13 @@
       e.preventDefault();
       const go = f2.querySelector('#go'), er = f2.querySelector('#er'); er.textContent = '';
       let customer; try { customer = window.A3forms.read(f2, sel.plan); } catch (err) { er.textContent = err.message; return; }
-      const code = f2.querySelector('#promo').value.trim();
+      const code = f2.querySelector('#promo').value.trim(), region = f2.querySelector('#region').value;
+      if (st.info?.tax && !region) { er.textContent = 'Pick your region so we can add the right tax.'; f2.querySelector('#region').focus(); return; }
+      const gift = isGift() ? { months: giftM, to_name: f2.querySelector('#gName').value.trim(), to_email: f2.querySelector('#gEmail').value.trim(), message: f2.querySelector('#gMsg').value.trim() } : undefined;
+      if (gift && !gift.to_name) { er.textContent = "Who's the gift for? Add their name."; f2.querySelector('#gName').focus(); return; }
       go.disabled = true; go.innerHTML = '<span class="spin"></span> Opening Stripe…';
       try {
-        const r = await post('checkout', { action: 'start', ...sel, customer, promo: code || undefined });
+        const r = await post('checkout', { action: 'start', ...sel, customer, promo: code || undefined, region: region || undefined, gift, followup: f2.querySelector('#remind').checked });
         location.href = r.url;
       } catch (err) { er.textContent = err.message; go.disabled = false; go.textContent = 'Continue to payment'; }
     };
@@ -226,14 +264,29 @@
 
   // ---------- links, orb
   document.querySelectorAll('a.mail').forEach(a => a.href = mailto('aARgon3'));
-  if (CFG.portalUrl) { $('portalLink').href = CFG.portalUrl; $('portalLink').hidden = false; $('portalFaq').innerHTML = `<a href="${esc(CFG.portalUrl)}">Manage your subscription here</a> with the email you paid with.`; }
-  if (new URLSearchParams(location.search).has('cancelled')) toast('Payment cancelled. Nothing was charged.');
+  const q = new URLSearchParams(location.search);
+  if (q.has('cancelled')) toast('Payment cancelled. Nothing was charged.');
+  // a friend's referral link: ?ref=REF-XXXXXX (kept for this visit, filled into the code box)
+  if (/^REF-[A-Z0-9]{6}$/i.test(q.get('ref') || '')) {
+    store.set('a3_ref', q.get('ref').toUpperCase());
+    const n = document.createElement('div'); n.className = 'refnote'; n.innerHTML = `🎉 A friend sent you a month off. Code <b class="mono">${esc(q.get('ref').toUpperCase())}</b> is filled in at checkout.`; $('tiers').before(n);
+  }
+  // a link back to a plan (from a reminder email): ?plan=business&tier=pro&billing=month
+  if (PLANS.includes(q.get('plan'))) { st.plan = q.get('plan'); if (['month', 'year'].includes(q.get('billing'))) st.billing = q.get('billing'); }
   renderPlanSeg(); renderTiers(); renderFamilies();
-  // closed for now? (owner switch in the terminal)
+  if (q.get('tier') && TIERS.includes(q.get('tier')) && !C.plans[st.plan].quote) setTimeout(() => { $('plans').scrollIntoView(); openSetup(q.get('tier')); }, 300);
+  const nice = d => new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
   post('checkout', { action: 'info' }).then(i => {
-    if (i.open) return;
-    st.closed = true; st.closedMsg = i.message || 'The store is closed for now. Please check back soon.';
-    const n = document.createElement('div'); n.className = 'closed'; n.textContent = st.closedMsg; $('tiers').before(n);
+    st.info = i;
+    if (!i.open) {   // closed for now (owner switch, or a closure on the calendar)
+      st.closed = true; st.closedMsg = i.message || 'The store is closed for now. Please check back soon.';
+      const n = document.createElement('div'); n.className = 'closed'; n.textContent = st.closedMsg; $('tiers').before(n);
+      return;
+    }
+    // heads-up for closures in the next two weeks
+    const soon = (i.closures || []).filter(c => (new Date(c.starts_on) - Date.now()) / 864e5 < 14);
+    if (soon.length) { const n = document.createElement('div'); n.className = 'closed soon';
+      n.innerHTML = soon.map(c => `Heads up: the online store is closed ${c.starts_on === c.ends_on ? nice(c.starts_on) : `${nice(c.starts_on)} – ${nice(c.ends_on)}`}${c.reason ? ` for ${esc(c.reason)}` : ''}.`).join('<br>'); $('tiers').before(n); }
   }).catch(() => {});
   try {
     const orb = window.NexusOrb.create($('heroOrb'), { color: '#5ce1ff' });

@@ -44,7 +44,7 @@ test('checkout: the server sets the price and asks for the company details', asy
 test('checkout: the store can be closed', async () => {
   const w = world(), h = checkout(ENV, w.fetch);
   w.settings.store = { open: false, message: 'Back Monday!' };
-  assert.deepStrictEqual((await call(h, { action: 'info' })).body, { open: false, message: 'Back Monday!' });
+  const info = (await call(h, { action: 'info' })).body; assert.strictEqual(info.open, false); assert.strictEqual(info.message, 'Back Monday!');
   const r = await call(h, { action: 'start', plan: 'personal', tier: 'pro', customer: PAT });
   assert.strictEqual(r.status, 409); assert.strictEqual(r.body.error, 'Back Monday!');
   // before aargon3-2.1.sql there are no settings: the store stays open
@@ -126,7 +126,13 @@ test('webhook: cancelled or unpaid subscriptions stop the order; fixed ones rest
   await send('customer.subscription.updated', 'unpaid');
   await send('customer.subscription.updated', 'active');
   await send('customer.subscription.updated', 'past_due');
-  assert.deepStrictEqual(w.statuses.map(s => [s.p_subscription, s.p_status]), [['sub_9', 'CANCELLED'], ['sub_9', 'CANCELLED'], ['sub_9', 'ACTIVE']]);
+  assert.deepStrictEqual(w.statuses.map(s => [s.p_subscription, s.p_status]), [['sub_9', 'CANCELLED']]);
+  assert.deepStrictEqual(w.rpcs.filter(r => r.name === 'a3_subscription_sync').map(r => r.a.p.status ?? null), ['CANCELLED', 'ACTIVE', null]);
+  // 2.4: a paused subscription is PAUSED (Stripe keeps its status "active" while collection is paused)
+  const b = JSON.stringify({ type: 'customer.subscription.updated', data: { object: { id: 'sub_9', status: 'active', pause_collection: { behavior: 'void', resumes_at: 1800000000 }, cancel_at_period_end: true, current_period_end: 1790000000 } } });
+  await call(h, b, signed(b));
+  const last = w.rpcs.filter(r => r.name === 'a3_subscription_sync').pop().a.p;
+  assert.strictEqual(last.status, 'PAUSED'); assert.strictEqual(last.paused_until, new Date(1800000000e3).toISOString()); assert.strictEqual(last.cancel_at, new Date(1790000000e3).toISOString());
 });
 
 // ============================================================ staff: who gets in

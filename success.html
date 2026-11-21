@@ -13,7 +13,7 @@
 </head>
 <body>
 <div class="bgglow"></div>
-<nav><a class="brand" href="./"><img src="icons/icon-192.png" alt="">AARGON3</a><div class="links"><a href="./#faq">Help</a></div></nav>
+<nav><a class="brand" href="./"><img src="icons/icon-192.png" alt="">AARGON3</a><div class="links"><a href="account.html">Your order</a><a href="./#faq">Help</a></div></nav>
 <main class="page done" id="main">
   <div class="kicker">Finishing up</div>
   <h1><span class="spin"></span> Confirming your payment…</h1>
@@ -50,6 +50,18 @@
   function fail(msg) { main.innerHTML = `<div class="kicker">Hmm</div><h1>Almost</h1><p>${esc(msg)}</p><p><a class="btn" href="./#plans">Back to plans</a></p>`; }
   function show(o) {
     const c = o.config || {};
+    const site = location.href.replace(/success\.html.*$/, '');
+    if (o.gift) {   // a gift: the buyer gets the code to hand over (and it was emailed if they gave an address)
+      const g = o.gift, link = `${site}account.html?gift=${encodeURIComponent(g.code)}`;
+      main.innerHTML = `<div class="kicker">Gift ready 🎁</div><h1>Your gift for ${esc(g.to_name || 'them')} is ready.</h1>
+        <p>${esc(o.plan)} ${esc(c.service_tier || '')} for ${g.months} month${g.months === 1 ? '' : 's'}. ${g.to_email ? `We emailed the code to <b>${esc(g.to_email)}</b>.` : "Give them this code (we emailed it to you too):"}</p>
+        <div class="orderno" id="no">${esc(g.code)}</div>
+        <div class="row" style="justify-content:center;gap:8px"><button class="btn small" id="cp">Copy code</button><button class="btn small" id="cl">Copy claim link</button></div>
+        <p class="fine">They claim it on <a href="${esc(link)}">Your order</a>, and their months start then. Your receipt (order ${esc(o.order_id)}) is on its way from Stripe.</p>`;
+      document.getElementById('cp').onclick = e => copy(g.code, e.target);
+      document.getElementById('cl').onclick = e => copy(link, e.target);
+      return;
+    }
     main.innerHTML = `<div class="kicker">You're all set</div><h1>Welcome to aARgon3.</h1>
       <p>${esc(o.plan)} · ${esc(c.service_tier || '')} · ${esc(c.os || '')} on ${esc(c.chip || '')}</p>
       <div class="orderno" id="no">${esc(o.order_id)}</div>
@@ -60,9 +72,15 @@
           <div><b>Open Nexus '28</b><p>Don't have it yet? <a href="${esc(CFG.nexusSite)}">Download it free</a> for Mac or Windows.</p></div>
           <div><b>Settings → Account → Redeem an order</b><p>Paste your order number. Your models unlock right away, and your Your System card shows your LentOS and chip.</p></div>
           <div><b>Bring your team</b><p>On Business and Enterprise (and Personal Pro and Max), invite people to your order from the same screen.</p></div>
-        </div></div>`;
-    document.getElementById('cp').onclick = async e => { try { await navigator.clipboard.writeText(o.order_id); e.target.textContent = 'Copied ✓'; } catch { getSelection().selectAllChildren(document.getElementById('no')); } };
+        </div></div>
+      ${o.referral_code ? `<div class="card redeem refcard"><div class="kicker">Share the love</div>
+        <p style="margin:6px 0 10px">Your referral code is <b class="mono">${esc(o.referral_code)}</b>. A friend who uses it gets a month off, and you get a month of credit on your next bill.</p>
+        <button class="btn small" id="rl">Copy my referral link</button></div>` : ''}
+      <p class="fine" style="margin-top:18px">Change plan, pause or cancel anytime on <a href="account.html">Your order</a>.</p>`;
+    document.getElementById('cp').onclick = e => copy(o.order_id, e.target);
+    if (o.referral_code) document.getElementById('rl').onclick = e => copy(`${site}?ref=${o.referral_code}`, e.target);
   }
+  async function copy(text, btn) { try { await navigator.clipboard.writeText(text); btn.textContent = 'Copied ✓'; } catch { prompt('Copy this:', text); } }
   check();
 })();
 </script>

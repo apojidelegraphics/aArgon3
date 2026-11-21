@@ -11,7 +11,8 @@
 //
 // Body: { action, ... } — see `actions` below. The 2.0 actions (me, clock_in, clock_out, break, shifts, edit_shift, sale,
 // sale_status, comp, orders, order, cancel, log) keep working the same way for Apoji Admin.
-import { A3, cors, json, Oops, db, stripe, startCheckout, sessionStatus, newOrderId, newQuoteNo, sendInvoice, checkPromo, discountLabel, storeInfo } from '../_shared/lib.mjs';
+import { A3, cors, json, Oops, db, stripe, startCheckout, sessionStatus, newOrderId, newQuoteNo, sendInvoice, checkPromo, discountLabel, storeInfo,
+  taxFor, saveTax, mailer, receiptParams, subInfo, planChange, pauseSub, resumeSub, cancelAtEnd, billingPortal, publicOrder, storeStatus, cleanHours, EMAILJS_DEFAULTS } from '../_shared/lib.mjs';
 
 const NEXUS_URL = 'https://yzbnxpkuhlxsuwzbjifx.supabase.co';
 const NEXUS_KEY = 'sb_publishable_LY-EZORCvEQqW6AeQC5a8w_Z7wmeyjn';   // public key, safe to ship
@@ -25,6 +26,19 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
   const owners = (env.OWNER_EMAILS ? env.OWNER_EMAILS.split(',') : OWNER_EMAILS).map(e => e.trim().toLowerCase());
   const site = env.SITE_URL || 'https://apojidelegraphics.github.io/aArgon3';
   const cache = new Map();   // token → { who, until }
+  // tax region for a sale or quote: chosen in the terminal, else the region of the store you're clocked in at (or usually work at)
+  async function saleRegion(b, state = null, who = null) {
+    if (A3.C.regions[b.region]) return b.region;
+    const st = state || (who ? await rpc('a3_staff_state', { p_user: who.id, p_tz: TZ }).catch(() => null) : null);
+    const code = st?.shift?.store_code;
+    return (st?.stores || []).find(x => x.code === code)?.region || null;
+  }
+  async function orderWithSub(id) {
+    const st = await rpc('a3_order_stripe', { p_order: String(id || '') });
+    if (!st) throw new Oops('No order has that number.', 404);
+    const o = await rpc('a3_order', { p_order: st.order_id });
+    return { ...o, subscription: st.subscription, customer: st.customer };
+  }
 
   async function nexus(path, token, init = {}) {
     const res = await fetchImpl(`${nexusUrl}${path}`, { ...init, headers: { apikey: nexusKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers || {}) } });
@@ -92,9 +106,22 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
   const actions = {
     // ---------- you
     async me(who) {
-      const [state, overview, info] = await Promise.all([rpc('a3_staff_state', { p_user: who.id, p_tz: TZ }), rpc('a3_overview', { p_tz: TZ }), storeInfo(rpc)]);
-      const requests = who.manager ? await rpc('a3_quotes', { p_status: 'requested' }).then(l => (l || []).length).catch(() => 0) : 0;
-      return { user: who, state, overview, store: { open: info.open, message: info.message }, catalog: A3.C.version, requests };
+      const [state, overview, info, pub] = await Promise.all([rpc('a3_staff_state', { p_user: who.id, p_tz: TZ }), rpc('a3_overview', { p_tz: TZ }), storeInfo(rpc, now()),
+        rpc('a3_stores_public').catch(() => null)]);
+      let requests = 0, alerts = [];
+      if (who.manager) {
+        rpc('a3_expire').catch(() => {});   // in case pg_cron isn't on: finished gifts expire here too
+        // "low stock" style: custom orders and Enterprise quotes that have waited too long
+        const days = Number(info.settings?.alerts?.quote_days) || 3;
+        const list = await rpc('a3_quotes', { p_status: null }).catch(() => []);
+        requests = list.filter(q => q.status === 'requested').length;
+        alerts = list.filter(q => ['requested', 'draft', 'sent'].includes(q.status)).map(q => ({ quote_no: q.quote_no, status: q.status, plan: q.plan, tier: q.tier,
+          company: q.customer?.company || q.customer?.name || '', enterprise: q.plan === 'enterprise', days: Math.floor((now() - new Date(q.updated_at || q.created_at).getTime()) / 864e5) }))
+          .filter(a => a.days >= days).sort((a, b) => b.enterprise - a.enterprise || b.days - a.days).slice(0, 20);
+      }
+      const hours = pub ? { stores: pub.stores.map(x => ({ code: x.code, hours: x.hours, now: storeStatus(x, pub.closures, now()) })), closures: pub.closures } : null;
+      return { user: who, state, overview, store: { open: info.open, message: info.message, closure: info.closure || null }, catalog: A3.C.version, requests, alerts,
+        alert_days: Number(info.settings?.alerts?.quote_days) || 3, hours };
     },
     async overview() { return rpc('a3_overview', { p_tz: TZ }); },
     async profile(who) {
@@ -193,15 +220,16 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
       const state = await rpc('a3_staff_state', { p_user: who.id, p_tz: TZ });
       if (!state?.shift && !who.owner) throw new Oops('Clock in before you start a sale.');   // the owner never has to clock in
       const sel = A3.selection(b), customer = saleCustomer(sel.plan, b);
-      const promo = b.promo ? await checkPromo({ rpc, code: b.promo, sel, amount: A3.price(sel.plan, sel.tier, sel.billing).amount }) : null;
-      const r = await startCheckout({ call, siteUrl: site, sel, customer, promo, staff: { id: who.id, name: who.name, shiftId: state?.shift?.id || undefined } });
+      const promo = b.promo ? await checkPromo({ rpc, code: b.promo, sel, amount: A3.price(sel.plan, sel.tier, sel.billing).amount, email: customer.email }) : null;
+      const region = await saleRegion(b, state), info = await storeInfo(rpc, now());
+      const r = await startCheckout({ call, siteUrl: site, sel, customer, promo, region, tax: taxFor(info.settings, region), staff: { id: who.id, name: who.name, shiftId: state?.shift?.id || undefined } });
       await log(who, 'sale_link', { order_id: r.order_id, plan: sel.plan, tier: sel.tier, billing: sel.billing, amount: r.amount, company: customer.company || undefined, promo: promo?.code });
       return { ...r, ...(promo ? { promo: promo.code, promo_label: promo.label, after: promo.after } : {}) };
     },
     async sale_status(who, b) { return sessionStatus({ rpc, call, sessionId: b.session_id }); },
     async promo_check(who, b) {
       const sel = A3.selection(b), p = A3.price(sel.plan, sel.tier, sel.billing);
-      const x = await checkPromo({ rpc, code: b.code, sel, amount: p.amount });
+      const x = await checkPromo({ rpc, code: b.code, sel, amount: p.amount, email: b.email });
       if (!x) throw new Oops('Enter a code.');
       return { code: x.code, label: x.label, after: x.after, before: p.amount };
     },
@@ -253,11 +281,13 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
           operator: who.name, payment_method: 'comp', notes: q.notes } });
         r = { delivery: 'free', order_id, status: 'paid' };
       } else if (how === 'invoice') {
-        const inv = await sendInvoice({ call, sel, customer, custom, staff: { id: who.id, name: who.name }, daysUntilDue: b.days_until_due });
+        const region = await saleRegion(b, null, who), info = await storeInfo(rpc, now());
+        const inv = await sendInvoice({ call, sel, customer, custom, staff: { id: who.id, name: who.name }, daysUntilDue: b.days_until_due, region, tax: taxFor(info.settings, region) });
         await rpc('a3_quote_save', { p: { quote_no: q.quote_no, status: 'sent', delivery: 'invoice', url: inv.url, stripe_invoice_id: inv.invoice_id, stripe_subscription_id: inv.subscription_id } });
         r = { delivery: 'invoice', url: inv.url, email: inv.email, order_id: inv.order_id, status: 'sent' };
       } else {
-        const ck = await startCheckout({ call, siteUrl: site, sel, customer, custom, staff: { id: who.id, name: who.name } });
+        const region = await saleRegion(b, null, who), info = await storeInfo(rpc, now());
+        const ck = await startCheckout({ call, siteUrl: site, sel, customer, custom, region, tax: taxFor(info.settings, region), staff: { id: who.id, name: who.name } });
         await rpc('a3_quote_save', { p: { quote_no: q.quote_no, status: 'sent', delivery: 'link', url: ck.url, stripe_session_id: ck.session_id } });
         r = { delivery: 'link', url: ck.url, session_id: ck.session_id, order_id: ck.order_id, status: 'sent' };
       }
@@ -314,8 +344,81 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
     async order(who, b) {
       const o = await rpc('a3_order', { p_order: String(b.order_id || '') });
       if (!o) throw new Oops('No order has that number.', 404);
-      delete o.stripe_subscription_id; return o;
+      const sub = o.stripe_subscription_id ? await subInfo(call, o.stripe_subscription_id).catch(() => null) : null;
+      const pub = publicOrder({ ...o, subscription: o.stripe_subscription_id }, sub);
+      delete o.stripe_subscription_id;
+      return { ...o, current_period_end: pub.current_period_end, cancel_at: pub.cancel_at, paused_until: pub.paused_until, price: pub.price, interval: pub.interval,
+        can: who.manager ? pub.can : { card: false } };
     },
+    // ---------- 2.4: plan changes, pauses, cancelling at the period end (managers), emailed receipts (anyone)
+    async order_change(who, b) {
+      need(who, 'manager');
+      const o = await orderWithSub(b.order_id);
+      const sel = A3.selection({ plan: b.plan, tier: b.tier, billing: b.billing, os: o.config?.os, connection: o.config?.connection });
+      const r = await planChange({ call, rpc, o, sel, apply: !!b.apply, by: who.name, nowSec: Math.floor(now() / 1000) });
+      if (b.apply) await log(who, 'plan_change', { order_id: o.order_id, from: r.from, to: r.to, due_now: r.due_now, credit: r.credit });
+      return r;
+    },
+    async order_pause(who, b) {
+      need(who, 'manager');
+      const o = await orderWithSub(b.order_id), r = await pauseSub({ call, rpc, o, months: b.months, by: who.name, nowSec: Math.floor(now() / 1000) });
+      await log(who, 'pause', { order_id: o.order_id, months: Number(b.months) }); return r;
+    },
+    async order_resume(who, b) {
+      need(who, 'manager');
+      const o = await orderWithSub(b.order_id), r = await resumeSub({ call, rpc, o, by: who.name });
+      await log(who, 'resume', { order_id: o.order_id }); return r;
+    },
+    async order_cancel_end(who, b) {
+      need(who, 'manager');
+      const o = await orderWithSub(b.order_id), r = await cancelAtEnd({ call, rpc, o, undo: !!b.undo, by: who.name });
+      await log(who, b.undo ? 'keep' : 'cancel_at_end', { order_id: o.order_id }); return r;
+    },
+    async order_card_link(who, b) {
+      need(who, 'manager');
+      const st = await rpc('a3_order_stripe', { p_order: String(b.order_id || '') });
+      return { url: await billingPortal({ call, customer: st?.customer, returnUrl: `${site.replace(/\/$/, '')}/account.html` }) };
+    },
+    async receipt_email(who, b) {
+      const o = await rpc('a3_order', { p_order: String(b.order_id || '') });
+      if (!o) throw new Oops('No order has that number.', 404);
+      const to = String(b.to || o.customer_email || '').trim();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) throw new Oops("Add the customer's email.");
+      const [state, s] = await Promise.all([rpc('a3_staff_state', { p_user: who.id, p_tz: TZ }).catch(() => null), rpc('a3_settings').catch(() => ({}))]);
+      const storeName = o.store || state?.shift?.store || '';
+      const business = s?.business?.name || 'aARgon3';
+      const mail = mailer(env, fetchImpl, s);
+      await mail.receipt(receiptParams(o, { store: storeName ? `${business} · ${storeName}` : business, to }));
+      await log(who, 'receipt_email', { order_id: o.order_id, to });
+      return { sent: true, to };
+    },
+    async email_test(who) {
+      need(who, 'owner');
+      const s = await rpc('a3_settings').catch(() => ({})), mail = mailer(env, fetchImpl, s);
+      const out = { to: who.email };
+      try { await mail.receipt(receiptParams({ order_id: 'TEST0000-0000', plan: 'Personal', tier: 'pro', billing: 'month', amount: 25, models: ['Lyte-28', 'Neodela'], customer_name: who.name, created_at: new Date(now()).toISOString() }, { store: `${s?.business?.name || 'aARgon3'} · test`, to: who.email })); out.receipt = 'sent'; }
+      catch (e) { out.receipt = e.message; }
+      try { await mail.message({ to_email: who.email, to_name: who.name, subject: 'aARgon3 test email', heading: 'It works!', message: 'This is the template gifts and checkout reminders use.', button_label: 'Open the store', button_url: mail.site }); out.message = 'sent'; }
+      catch (e) { out.message = e.message; }
+      return out;
+    },
+    async referrals(who) { need(who, 'manager'); return rpc('a3_referrals', { p_limit: 200 }); },
+    async abandoned(who) { need(who, 'manager'); return rpc('a3_abandoned', { p_limit: 200 }); },
+    // ---------- store hours (owner) and closures (managers)
+    async stores_public() { const pub = await rpc('a3_stores_public'); return { ...pub, stores: pub.stores.map(x => ({ ...x, now: storeStatus(x, pub.closures, now()) })) }; },
+    async store_hours(who, b) {
+      need(who, 'owner');
+      const r = await rpc('a3_store_hours', { p_code: String(b.code || ''), p_hours: cleanHours(b.hours) });
+      await log(who, 'store_hours', { code: b.code }); return r;
+    },
+    async closure_save(who, b) {
+      need(who, 'manager');
+      const d = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? v : (() => { throw new Oops('Pick the dates.'); })();
+      const r = await rpc('a3_closure_save', { p: { id: b.id || null, store_code: b.store_code || '', starts_on: d(b.starts_on), ends_on: d(b.ends_on || b.starts_on),
+        reason: String(b.reason || '').slice(0, 120), by: who.name } });
+      await log(who, 'closure', { store: b.store_code || 'online', starts_on: b.starts_on, ends_on: b.ends_on || b.starts_on, reason: b.reason || '' }); return r;
+    },
+    async closure_delete(who, b) { need(who, 'manager'); const r = await rpc('a3_closure_delete', { p_id: Number(b.id) }); await log(who, 'closure_delete', { id: Number(b.id) }); return r; },
     async cancel(who, b) {
       need(who, 'manager');
       const o = await rpc('a3_order', { p_order: String(b.order_id || '') });
@@ -369,7 +472,12 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
     },
 
     // ---------- owner: settings and stores
-    async settings(who) { need(who, 'manager'); return { settings: await rpc('a3_settings'), stores: await rpc('a3_stores_all') }; },
+    async settings(who) {
+      need(who, 'manager');
+      const [settings, stores, pub] = await Promise.all([rpc('a3_settings'), rpc('a3_stores_all'), rpc('a3_stores_public').catch(() => null)]);
+      const hours = Object.fromEntries((pub?.stores || []).map(x => [x.code, x.hours]));
+      return { settings, stores: stores.map(x => ({ ...x, hours: hours[x.code] ?? null })), closures: pub?.closures || [], email_defaults: EMAILJS_DEFAULTS, has_private_key: !!env.EMAILJS_PRIVATE_KEY };
+    },
     async settings_save(who, b) {
       need(who, 'owner');
       const key = String(b.key || ''), v = b.value || {};
@@ -378,6 +486,15 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
       else if (key === 'business') value = { name: String(v.name || '').slice(0, 120), support_email: String(v.support_email || '').slice(0, 120), address: String(v.address || '').slice(0, 200), phone: String(v.phone || '').slice(0, 40) };
       else if (key === 'goals') value = { monthly_revenue: Math.max(0, Number(v.monthly_revenue) || 0) };
       else if (key === 'points') value = { late: Math.max(-10, Math.min(0, Math.round(Number(v.late) || 0))) };
+      else if (key === 'tax') value = await saveTax({ call, value: v, old: (await rpc('a3_settings'))?.tax || {} });
+      else if (key === 'alerts') value = { quote_days: Math.max(1, Math.min(60, Math.round(Number(v.quote_days) || 3))) };
+      else if (key === 'referral') value = { enabled: v.enabled !== false, max_per_year: Math.max(1, Math.min(100, Math.round(Number(v.max_per_year) || 12))) };
+      else if (key === 'followup') value = { enabled: v.enabled !== false };
+      else if (key === 'email') {
+        const id = (x, re) => { const t = String(x || '').trim(); if (t && !re.test(t)) throw new Oops(`"${t}" doesn't look like an EmailJS id.`); return t; };
+        value = { enabled: v.enabled !== false, service_id: id(v.service_id, /^[A-Za-z0-9_-]{3,60}$/), receipt_template: id(v.receipt_template, /^[A-Za-z0-9_-]{3,60}$/),
+          message_template: id(v.message_template, /^[A-Za-z0-9_-]{3,60}$/), public_key: id(v.public_key, /^[A-Za-z0-9_-]{6,60}$/) };
+      }
       else throw new Oops('Unknown setting.');
       const r = await rpc('a3_setting_set', { p_key: key, p_value: value, p_by: who.name });
       await log(who, 'settings', { key, ...value }); return r;
