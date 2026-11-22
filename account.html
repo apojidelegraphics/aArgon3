@@ -112,7 +112,7 @@
     $('find').closest('section').hidden = true;
     $('view').hidden = false;
     $('view').innerHTML = `
-      <div class="acct-top"><div><div class="kicker">Order <span class="mono">${esc(o.order_id)}</span></div>
+      <div class="acct-top"><div><div class="kicker">Order <span class="mono">${esc(o.order_id)}</span> <button class="cpb" id="cpo" title="Copy the order number">Copy</button></div>
         <h1>${esc(o.plan)} ${esc(tierName(o.tier))}</h1><p class="muted" style="margin:0">${esc(o.company_name || o.customer_name || '')}${o.customer_email ? ` · ${esc(o.customer_email)}` : ''}</p></div>
         <span class="sp"></span><span class="pill ${cls}">${esc(word)}</span><button class="btn small quiet" id="out">Not you? Look up another</button></div>
       <div class="acct-grid">
@@ -127,6 +127,10 @@
             ${o.can.card ? '<button class="btn small" id="card">Update card</button>' : ''}
             ${o.can.cancel ? '<button class="btn small danger" id="cancel">Cancel</button>' : ''}
           </div>
+          ${view.next ? `<div class="nextbill"><div class="nb-top"><span>Next bill</span><b>${money(view.next.amount)}</b></div><div class="nb-date">${day(view.next.date)}</div>
+            ${view.next.discount ? `<div class="nb-l"><span>Discount</span><span class="good">−${money(view.next.discount)}</span></div>` : ''}${view.next.tax ? `<div class="nb-l"><span>Tax</span><span>${money(view.next.tax)}</span></div>` : ''}
+            ${view.next.credit_used ? `<div class="nb-l"><span>Credit used</span><span class="good">−${money(view.next.credit_used)}</span></div>` : ''}${view.next.credit > view.next.credit_used ? `<div class="nb-l"><span>Credit left after</span><span>${money(view.next.credit - view.next.credit_used)}</span></div>` : ''}</div>` : ''}
+          ${o.can.code ? `<form class="codeform" id="codef"><input class="field mono" id="pcode" placeholder="Have a promo code?" maxlength="30" autocomplete="off"><button class="btn small">Add</button></form><div class="err" id="cer"></div>` : ''}
           ${!o.subscription && !['CANCELLED', 'EXPIRED'].includes(o.status) && o.quote_no ? '<p class="fine">This is a custom order. Reply to your invoice email to change it.</p>' : ''}
         </div>
         <div class="card"><h3>Your system</h3><div class="kv">
@@ -137,7 +141,15 @@
           ${o.region ? `<span>Region</span><span>${esc(o.region)} · ${esc(C.regions[o.region] || '')}</span>` : ''}
         </div>
         <div class="fam-chips">${(o.models || []).map(m => `<span>${esc(m)}</span>`).join('')}</div>
+        ${o.deals?.length ? `<div class="acct-deals">${o.deals.map(d => `<span>🎁 ${esc(d.headline)}</span>`).join('')}</div>` : ''}
         <p class="fine" style="margin:10px 0 0">Redeem it in Nexus '28: Settings → Account → Redeem an order.</p></div>
+        <div class="card"><h3>Contact details</h3><div class="kv">
+          <span>Name</span><span>${esc(`${o.contact.first} ${o.contact.last}`.trim() || '—')}</span>
+          ${o.contact.company ? `<span>${planKey(o.plan) === 'enterprise' ? 'Company' : 'Business'}</span><span>${esc(o.contact.company)}</span>` : ''}
+          <span>Email</span><span>${esc(o.customer_email || '—')}</span>
+          ${o.contact.billing_email ? `<span>Billing email</span><span>${esc(o.contact.billing_email)}</span>` : ''}
+          <span>Phone</span><span>${esc(o.contact.phone || '—')}</span></div>
+          <div class="acct-acts" style="margin-top:12px"><button class="btn small" id="edc">Edit details</button><button class="btn small quiet" id="rcpt">Email me a receipt</button></div></div>
         ${o.referral_code && view.referral_enabled ? `<div class="card refcard"><h3>Give a month, get a month</h3>
           <p style="margin:4px 0 10px">Share your code <b class="mono">${esc(o.referral_code)}</b>. A friend who uses it gets a month off; you get a month of credit on your next bill.</p>
           <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn small" id="refcp">Copy my link</button>
@@ -147,6 +159,7 @@
             <td><span class="pill ${i.status === 'paid' ? 'ok' : i.status === 'open' ? 'warn' : 'dim'}">${esc(i.status)}</span></td>
             <td class="r">${i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener">${i.status === 'open' ? 'Pay' : 'View'}</a>` : ''}${i.pdf ? ` · <a href="${esc(i.pdf)}" target="_blank" rel="noopener">PDF</a>` : ''}</td></tr>`).join('')}</tbody></table>`
             : '<p class="muted" style="margin:0">No invoices to show yet. Your Stripe receipt email has the details.</p>'}</div>
+        ${o.history?.length ? `<div class="card acct-inv"><h3>History</h3><ol class="tl">${[{ kind: 'created', at: o.created_at }, ...o.history].filter(h => h.at).sort((a, b) => new Date(b.at) - new Date(a.at)).map(h => `<li><span class="tl-d">${day(h.at)}</span><span>${esc(histText(h))}</span></li>`).join('')}</ol></div>` : ''}
       </div>`;
     const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
     on('out', () => { sessionStorage.removeItem('a3_portal'); me = null; view = null; $('view').hidden = true; $('find').closest('section').hidden = false; });
@@ -157,6 +170,34 @@
     on('keep', e => busy(e.target, 'Keeping…', async () => { try { view = await act('portal_keep'); render(); toast("Great, you're staying. Nothing changes.", 'ok'); } catch (err) { toast(err.message, 'bad'); } }));
     on('card', e => busy(e.target, 'Opening…', async () => { try { location.href = (await act('portal_card')).url; } catch (err) { toast(err.message, 'bad'); } }));
     on('cancel', cancelSheet);
+    on('cpo', async e => { try { await navigator.clipboard.writeText(o.order_id); e.target.textContent = 'Copied ✓'; setTimeout(() => e.target.textContent = 'Copy', 1500); } catch { prompt('Your order number:', o.order_id); } });
+    on('edc', contactSheet);
+    on('rcpt', e => busy(e.target, 'Sending…', async () => { try { const r = await act('portal_receipt'); toast(`Sent to ${r.to}.`, 'ok'); } catch (err) { toast(err.message, 'bad'); } }));
+    const cf = $('codef');
+    if (cf) cf.onsubmit = ev => { ev.preventDefault(); $('cer').textContent = ''; const code = $('pcode').value.trim(); if (!code) return;
+      busy(cf.querySelector('button'), 'Adding…', async () => { try { const r = await act('portal_code', { code }); view = r; render(); toast(`${code.toUpperCase()} added${r.label ? `: ${r.label}` : ''}.`, 'ok'); } catch (err) { $('cer').textContent = err.message; } }); };
+  }
+  function histText(h) {
+    return { created: 'Order placed', change: `Changed plan${h.from ? ` from ${h.from}` : ''}${h.to ? ` to ${h.to}` : ''}`, pause: `Paused${h.months ? ` for ${h.months} month${h.months === 1 ? '' : 's'}` : ''}`, resume: 'Resumed',
+      cancel_at_end: 'Set to cancel at the end of the period', keep: 'Kept the plan (cancel undone)', code: `Added code ${h.code || ''}`.trim(), contact: 'Updated contact details',
+      referral: 'Friend joined with your code', renew: 'Renewed', gift: 'Gift redeemed' }[h.kind] || (h.kind ? h.kind[0].toUpperCase() + h.kind.slice(1).replace(/_/g, ' ') : 'Update');
+  }
+  function contactSheet() {
+    const o = view.order, c = o.contact, biz = planKey(o.plan) !== 'personal', ent = planKey(o.plan) === 'enterprise';
+    sheet(`<h3>Contact details</h3>
+      <div class="grid2"><label>First name<input class="field" id="cf1" value="${esc(c.first)}" maxlength="60"></label><label>Last name<input class="field" id="cf2" value="${esc(c.last)}" maxlength="60"></label></div>
+      ${biz ? `<label>${ent ? 'Corporate entity' : 'Business name'}<input class="field" id="cfc" value="${esc(c.company)}" maxlength="120"></label><label>Job title <span class="muted">(optional)</span><input class="field" id="cft" value="${esc(c.title)}" maxlength="80"></label>
+        <label>Billing email <span class="muted">(optional, for invoices)</span><input class="field" id="cfb" type="email" value="${esc(c.billing_email)}"></label>` : ''}
+      <label>Phone <span class="muted">(optional)</span><input class="field" id="cfp" type="tel" value="${esc(c.phone)}" maxlength="30"></label>
+      <p class="fine">Your sign-in email (${esc(o.customer_email || '')}) stays the same so you can keep finding this order. Email us to change it.</p>
+      <div class="err" id="cfe"></div>
+      <div class="acts"><button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="cfs">Save</button></div>`, (el, close) => {
+      const v = id => el.querySelector(id)?.value || '';
+      el.querySelector('#cfs').onclick = e => busy(e.target, 'Saving…', async () => {
+        try { view = await act('portal_contact', { contact: { first: v('#cf1'), last: v('#cf2'), company: v('#cfc'), title: v('#cft'), billing_email: v('#cfb'), phone: v('#cfp') } }); close(); render(); toast('Saved.', 'ok'); }
+        catch (err) { el.querySelector('#cfe').textContent = err.message; }
+      });
+    });
   }
 
   // ---------- change plan: pick → see the difference → confirm

@@ -12,7 +12,8 @@
 // Body: { action, ... } — see `actions` below. The 2.0 actions (me, clock_in, clock_out, break, shifts, edit_shift, sale,
 // sale_status, comp, orders, order, cancel, log) keep working the same way for Apoji Admin.
 import { A3, cors, json, Oops, db, stripe, startCheckout, sessionStatus, newOrderId, newQuoteNo, sendInvoice, checkPromo, discountLabel, storeInfo,
-  taxFor, saveTax, mailer, receiptParams, subInfo, planChange, pauseSub, resumeSub, cancelAtEnd, billingPortal, publicOrder, storeStatus, cleanHours, EMAILJS_DEFAULTS } from '../_shared/lib.mjs';
+  taxFor, saveTax, mailer, receiptParams, subInfo, planChange, pauseSub, resumeSub, cancelAtEnd, billingPortal, publicOrder, storeStatus, cleanHours, EMAILJS_DEFAULTS,
+  liveDeals, applyDeals, publicDeal, saveDeal, codesFor, upgradeOldCode, makeCodes } from '../_shared/lib.mjs';
 
 const NEXUS_URL = 'https://yzbnxpkuhlxsuwzbjifx.supabase.co';
 const NEXUS_KEY = 'sb_publishable_LY-EZORCvEQqW6AeQC5a8w_Z7wmeyjn';   // public key, safe to ship
@@ -222,7 +223,8 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
       const sel = A3.selection(b), customer = saleCustomer(sel.plan, b);
       const promo = b.promo ? await checkPromo({ rpc, code: b.promo, sel, amount: A3.price(sel.plan, sel.tier, sel.billing).amount, email: customer.email }) : null;
       const region = await saleRegion(b, state), info = await storeInfo(rpc, now());
-      const r = await startCheckout({ call, siteUrl: site, sel, customer, promo, region, tax: taxFor(info.settings, region), staff: { id: who.id, name: who.name, shiftId: state?.shift?.id || undefined } });
+      const deals = applyDeals(await liveDeals(rpc), sel, { promo });
+      const r = await startCheckout({ call, siteUrl: site, sel, customer, promo, region, deals, tax: taxFor(info.settings, region), staff: { id: who.id, name: who.name, shiftId: state?.shift?.id || undefined } });
       await log(who, 'sale_link', { order_id: r.order_id, plan: sel.plan, tier: sel.tier, billing: sel.billing, amount: r.amount, company: customer.company || undefined, promo: promo?.code });
       return { ...r, ...(promo ? { promo: promo.code, promo_label: promo.label, after: promo.after } : {}) };
     },
@@ -232,6 +234,14 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
       const x = await checkPromo({ rpc, code: b.code, sel, amount: p.amount, email: b.email });
       if (!x) throw new Oops('Enter a code.');
       return { code: x.code, label: x.label, after: x.after, before: p.amount };
+    },
+    // 2.5: the "find a code" panel on New sale: codes that fit this plan (and ones that almost do), plus the deals it gets automatically
+    async promo_list(who, b) {
+      const sel = A3.selection(b);
+      const [codes, deals] = await Promise.all([codesFor({ rpc, sel }), liveDeals(rpc)]);
+      const auto = applyDeals(deals, sel);
+      return { codes, deals: auto.applied.map(publicDeal), saving: auto.saving, after: auto.after, before: A3.price(sel.plan, sel.tier, sel.billing).amount,
+        models: auto.models, chip: auto.chip, seats: auto.seats };
     },
     async comp(who, b) {
       need(who, 'manager');
@@ -441,7 +451,41 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
     async sales(who, b) { return rpc('a3_sales', { p_user: who.manager && !b.mine ? null : who.id, p_tz: TZ }); },
 
     // ---------- promotions (managers) — a code here is a Stripe coupon + promotion code
-    async promos(who) { need(who, 'manager'); return rpc('a3_promos'); },
+    async promos(who) {
+      need(who, 'manager');
+      await rpc('a3_expire').catch(() => {});   // expired and used-up codes switch off (pg_cron does this hourly too)
+      return rpc('a3_promos');
+    },
+    // the generator: one code, or a batch of single-use codes that share a start (WINTER26-XXXX)
+    async promo_batch(who, b) {
+      need(who, 'manager');
+      const r = await makeCodes({ call, rpc, b, by: who.name });
+      await log(who, 'promo', { code: r.length > 1 ? `${r[0].batch} ×${r.length}` : r[0].code, type: r[0].type, value: r[0].value, duration: r[0].duration });
+      return r;
+    },
+    // the old aARgon3 codes (made before 2.1, no Stripe coupon): rewrite each one so it works with checkout
+    async promo_upgrade(who) {
+      need(who, 'manager');
+      const all = await rpc('a3_promos'), old = all.filter(x => x.old), taken = new Set(all.map(x => x.code));
+      const results = [];
+      for (const x of old) {
+        try { const r = await upgradeOldCode({ call, rpc, x, taken, nowMs: now() }); taken.add(r.code); results.push({ from: x.code, code: r.code, result: r.result, live: r.live }); }
+        catch (e) { results.push({ from: x.code, code: x.code, result: `couldn't: ${e.message}`, live: false, error: true }); }
+      }
+      if (results.length) await log(who, 'promo_upgrade', { count: results.length, working: results.filter(r => r.live).length });
+      return results;
+    },
+    // ---------- deals (managers)
+    async deals(who) { need(who, 'manager'); await rpc('a3_expire').catch(() => {}); return rpc('a3_deals'); },
+    async deal_save(who, b) {
+      need(who, 'manager');
+      if (b.id) {
+        const r = await rpc('a3_deal_save', { p: { id: Number(b.id), ...('active' in b ? { active: !!b.active } : {}), ...('featured' in b ? { featured: !!b.featured } : {}) } });
+        await log(who, 'deal_edit', { name: r.name, active: r.active, featured: r.featured }); return r;
+      }
+      const r = await saveDeal({ call, rpc, b, by: who.name });
+      await log(who, 'deal', { name: r.name, kind: r.kind }); return r;
+    },
     async promo_save(who, b) {
       need(who, 'manager');
       if (b.id) {   // switch on/off, change end date or limit

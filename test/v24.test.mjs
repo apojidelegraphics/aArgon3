@@ -126,9 +126,10 @@ test('customer portal: number + email, slows down guessing, shows plan, renewal 
   const r = await call(store, { action: 'portal', order: order.order_id.toLowerCase(), email: ' PAT@co.com ' });
   assert.strictEqual(r.status, 200, JSON.stringify(r.body));
   assert.strictEqual(r.body.order.plan, 'Personal'); assert.ok(r.body.order.current_period_end); assert.strictEqual(r.body.order.price, 25);
-  assert.match(r.body.order.referral_code, /^REF-/); assert.deepStrictEqual(r.body.order.can, { change: true, pause: true, resume: false, cancel: true, keep: false, card: true });
+  assert.match(r.body.order.referral_code, /^REF-/); assert.deepStrictEqual(r.body.order.can, { change: true, pause: true, resume: false, cancel: true, keep: false, card: true, code: true });
   assert.strictEqual(r.body.invoices[0].url, 'https://invoice.stripe.com/i/1');
-  for (const k of ['operator', 'staff_user_id', 'customer_info', 'history', 'notes']) assert.ok(!(k in r.body.order), k);
+  for (const k of ['operator', 'staff_user_id', 'customer_info', 'notes']) assert.ok(!(k in r.body.order), k);
+  assert.ok(r.body.order.history.every(h => !('by' in h)), 'history without staff names');
   // wrong email: 404, counted; ten wrong and that IP waits
   for (let i = 0; i < 10; i++) assert.strictEqual((await call(store, { action: 'portal', order: order.order_id, email: 'x@y.co' })).status, 404);
   assert.strictEqual((await call(store, { action: 'portal', order: order.order_id, email: 'pat@co.com' })).status, 429);

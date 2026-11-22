@@ -158,3 +158,30 @@ table.mini { width: 100%; border-collapse: collapse; font-size: 14px; } table.mi
   .cg { grid-template-columns: repeat(2, 1fr); } .acct-acts .btn { flex: 1 1 auto; }
   table.mini td:nth-child(2) { display: none; }
 }
+
+/* ================================================================ 2.5 deals */
+#deals { margin: 6px 0 22px; }
+.deals-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; } .deals-head .muted { font-size: 14px; }
+.deals { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+.deal { position: relative; padding: 20px; border-radius: 20px; border: 1px solid rgba(177,140,255,.4); background: linear-gradient(140deg, rgba(177,140,255,.16), rgba(92,225,255,.06) 60%, rgba(4,11,20,.4)); overflow: hidden; }
+.deal::after { content: ''; position: absolute; right: -40px; top: -40px; width: 140px; height: 140px; border-radius: 50%; background: radial-gradient(circle, rgba(177,140,255,.35), transparent 70%); pointer-events: none; }
+.deal .dk { font: 800 11px var(--mono); letter-spacing: .2em; color: var(--violet); } .deal h3 { margin: 8px 0 6px; font-size: 19px; line-height: 1.25; } .deal p { margin: 0; color: var(--muted); font-size: 14px; }
+.deal .dfoot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 14px; font-size: 12.5px; color: var(--muted); }
+.tier.has-deal { border-color: rgba(177,140,255,.45); } .flag.deal-flag { background: var(--violet); color: #140d2b; }
+.tier .price s { font-size: .55em; color: var(--muted); font-weight: 500; margin-right: 4px; } .deal-per { color: var(--violet) !important; font-weight: 600; }
+.deal-perks { margin: 10px 0 0; padding: 10px 12px; border-radius: 12px; background: rgba(177,140,255,.08); border: 1px dashed rgba(177,140,255,.35); font-size: 13.5px; display: grid; gap: 4px; }
+.totals .perk span { color: var(--violet); } .totals .perk b { color: var(--violet); }
+
+/* ================================================================ 2.5 portal */
+.cpb { font: 600 11px var(--sans); letter-spacing: 0; text-transform: none; padding: 3px 8px; margin-left: 6px; border-radius: 8px; border: 1px solid var(--line2); background: rgba(0,0,0,.2); color: var(--muted); cursor: pointer; vertical-align: 1px; }
+.cpb:hover { color: var(--accent); }
+.nextbill { margin: 0 0 14px; padding: 12px 14px; border-radius: 14px; background: rgba(var(--rgb), .06); border: 1px solid rgba(var(--rgb), .2); }
+.nb-top { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; color: var(--muted); } .nb-top b { font-size: 20px; color: var(--text); }
+.nb-date { font-size: 13px; color: var(--muted); margin-bottom: 4px; } .nb-l { display: flex; justify-content: space-between; font-size: 13.5px; padding-top: 3px; } .good { color: var(--mint); }
+.codeform { display: flex; gap: 8px; margin-top: 14px; } .codeform .field { flex: 1; text-transform: uppercase; min-width: 0; } .codeform + .err { min-height: 0; margin-top: 6px; color: #ff9b9b; font-size: 13px; }
+.acct-deals { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; } .acct-deals span { font-size: 13px; padding: 5px 10px; border-radius: 999px; background: rgba(177,140,255,.12); border: 1px solid rgba(177,140,255,.35); }
+.tl { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 0; } .tl li { display: grid; grid-template-columns: 150px 1fr; gap: 12px; padding: 9px 0 9px 16px; border-left: 2px solid var(--line2); position: relative; font-size: 14px; }
+.tl li::before { content: ''; position: absolute; left: -6px; top: 14px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px rgba(var(--rgb), .18); } .tl-d { color: var(--muted); font-size: 13px; }
+.sheet .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; } .sheet label { display: grid; gap: 5px; font-size: 13.5px; margin-top: 10px; }
+@media (max-width: 760px) { .tl li { grid-template-columns: 1fr; gap: 2px; } .sheet .grid2 { grid-template-columns: 1fr; } }
+.codeform .field::placeholder { text-transform: none; font-family: var(--sans); }

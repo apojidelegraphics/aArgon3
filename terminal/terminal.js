@@ -326,7 +326,8 @@
         <div class="sect-title">${draft.plan === 'personal' ? 'Customer' : 'Business and the person placing the order'}</div>
         <div id="cust">${window.A3forms.html(draft.plan, draft.customer)}</div>
         <label class="lbl">Promo code <span style="opacity:.6">(optional)</span></label>
-        <div class="promo-row"><input class="field" id="promo" placeholder="CODE" value="${esc(draft.promo?.code || '')}" maxlength="30"><button class="btn small" id="apply">Apply</button></div><div class="promo-ok" id="promoOk">${draft.promo ? `✓ ${esc(draft.promo.label)}` : ''}</div>
+        <div class="promo-row"><input class="field" id="promo" placeholder="CODE" value="${esc(draft.promo?.code || '')}" maxlength="30"><button class="btn small" id="apply">Apply</button><button class="btn small quiet" id="find">${ic('search', 15)} Find a code</button></div>
+        <div class="finder" id="finder" hidden></div><div class="promo-ok" id="promoOk">${draft.promo ? `✓ ${esc(draft.promo.label)}` : ''}</div>
         <p class="muted" style="font-size:13px;margin:14px 0 0">Enterprise, custom prices and invoices: ${can('manager') ? '<a href="#quotes" id="toQuotes">Custom orders</a>' : 'ask a manager (Custom orders)'}.</p>
       </div>
       <div class="card summary" id="sum"></div></div>`;
@@ -344,23 +345,53 @@
       $('promoOk').textContent = `✓ ${draft.promo.code}: ${draft.promo.label}`; paintSum();
     }).catch(() => { draft.promo = null; paintSum(); });
     $('toQuotes') && ($('toQuotes').onclick = e => { e.preventDefault(); go('quotes'); });
+    $('find').onclick = () => { $('finder').hidden = !$('finder').hidden; if (!$('finder').hidden) paintFinder(); };
     paintTiers();
+  }
+  // codes that fit what's picked (and ones that almost do), each with copy and use; plus the deals this sale gets on its own
+  let dealsKey = '';
+  function loadDeals() {
+    const key = `${draft.plan}/${draft.tier}/${draft.billing}`;
+    if (key === dealsKey && draft.auto) return;
+    dealsKey = key; draft.auto = null;
+    api('promo_list', { plan: draft.plan, tier: draft.tier, billing: draft.billing }).then(r => {
+      if (dealsKey !== key) return;
+      draft.auto = r; if ($('sum')) paintSum(); if ($('finder') && !$('finder').hidden) paintFinder();
+    }).catch(() => {});
+  }
+  function paintFinder() {
+    const el = $('finder'), r = draft.auto;
+    if (!r) { el.innerHTML = '<div class="muted" style="padding:10px"><span class="spin"></span> Looking…</div>'; loadDeals(); return; }
+    const fit = r.codes.filter(c => c.fits), not = r.codes.filter(c => !c.fits);
+    el.innerHTML = `${r.deals.length ? `<div class="fdeal">${ic('sparkles', 15)} <span>Already included: ${r.deals.map(d => `<b>${esc(d.headline)}</b>`).join(', ')}${r.deals.some(d => ['percent', 'amount'].includes(d.kind)) ? '. A code replaces the price deal (one discount per sale).' : '.'}</span></div>` : ''}
+      ${fit.map(c => `<div class="fcode"><span class="codecell"><b class="mono">${esc(c.code)}</b><button class="cp" data-copy="${esc(c.code)}" title="Copy">${ic('copy', 14)}</button></span>
+        <span class="fd">${esc(c.label)}${c.ends ? ` · ends ${fmtDate(c.ends)}` : ''}${c.left != null ? ` · ${c.left} left` : ''}</span><span class="fa">${money(c.after)}</span><button class="btn small" data-use="${esc(c.code)}">Use</button></div>`).join('')
+        || '<div class="muted" style="padding:8px 10px">No codes fit this plan right now.</div>'}
+      ${not.length ? `<details><summary>${not.length} code${not.length === 1 ? '' : 's'} that don't fit this plan</summary>${not.map(c => `<div class="fcode off"><span class="codecell"><b class="mono">${esc(c.code)}</b><button class="cp" data-copy="${esc(c.code)}" title="Copy">${ic('copy', 14)}</button></span><span class="fd">${esc(c.label)}</span><span class="muted">${esc(c.why)}</span></div>`).join('')}</details>` : ''}`;
+    el.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copy(b.dataset.copy, `Copied ${b.dataset.copy}`));
+    el.querySelectorAll('[data-use]').forEach(b => b.onclick = () => { $('promo').value = b.dataset.use; $('apply').click(); $('finder').hidden = true; });
   }
   function paintTiers() {
     $('tp').innerHTML = TIERS.map(t => { const p = price(draft.plan, t, draft.billing);
       return `<button class="tp ${t === draft.tier ? 'on' : ''}" data-t="${t}"><b>${esc(C.tiers[t].name)}</b><div class="pr">${money(p.amount)}<span class="muted" style="font-size:12px;font-weight:500">/${p.interval === 'year' ? 'yr' : 'mo'}</span></div><small>${p.seats === 1 ? '1 person' : `${p.seats} people`} · ${esc(C.tiers[t].chip)}</small></button>`; }).join('');
-    $('tp').querySelectorAll('.tp').forEach(b => b.onclick = () => { draft.tier = b.dataset.t; if (draft.promo) { draft.promo = null; $('promoOk').textContent = 'Tier changed: apply the code again.'; } paintTiers(); });
-    paintSum();
+    $('tp').querySelectorAll('.tp').forEach(b => b.onclick = () => { draft.tier = b.dataset.t; if (draft.promo) { draft.promo = null; $('promoOk').textContent = 'Tier changed: apply the code again.'; } paintTiers(); if (!$('finder').hidden) paintFinder(); });
+    loadDeals(); paintSum();
   }
   function paintSum() {
     const p = price(draft.plan, draft.tier, draft.billing), t = C.tiers[draft.tier], per = p.interval === 'year' ? 'yr' : 'mo';
+    const a = draft.auto && `${draft.plan}/${draft.tier}/${draft.billing}` === dealsKey ? draft.auto : null;
+    const priceDeal = !draft.promo && a?.deals.find(d => ['percent', 'amount'].includes(d.kind));
+    const total = draft.promo ? draft.promo.after : priceDeal ? a.after : p.amount;
     $('sum').innerHTML = `<h3>${esc(C.plans[draft.plan].name)} · ${esc(t.name)}</h3>
-      <div class="line"><span>People</span><span>${p.seats}</span></div><div class="line"><span>Chip</span><span>${esc(t.chip)}</span></div>
-      <div class="line"><span>Models</span><span>${t.families.map(f => esc(C.families[f].name)).join(' + ')}</span></div>
+      ${a?.deals.length ? `<div class="dealtags">${a.deals.map(d => `<span class="pill vio" title="${esc(d.description || '')}">${ic('sparkles', 12)} ${esc(d.headline)}</span>`).join('')}</div>` : ''}
+      <div class="line"><span>People</span><span>${p.seats != null && a?.seats ? `${p.seats + a.seats} <span class="muted">(+${a.seats} deal)</span>` : p.seats}</span></div>
+      <div class="line"><span>Chip</span><span>${a?.chip ? `${esc(a.chip)} <span class="muted">(deal)</span>` : esc(t.chip)}</span></div>
+      <div class="line"><span>Models</span><span>${t.families.map(f => esc(C.families[f].name)).join(' + ')}${a?.models.length ? ` <b style="color:var(--violet)">+ ${a.models.map(esc).join(', ')}</b>` : ''}</span></div>
       <div class="line"><span>LentOS</span><span>${esc(draft.os)}</span></div><div class="line"><span>Connection</span><span>${esc(draft.connection.replace(/ \(.*\)/, ''))}</span></div>
       <div class="line"><span>Billing</span><span>${p.interval === 'year' ? 'Yearly' : 'Monthly'}</span></div>
       ${draft.promo ? `<div class="line"><span>${esc(draft.promo.code)}</span><span style="color:var(--mint)">−${money(p.amount - draft.promo.after)}</span></div>` : ''}
-      <div class="total"><span class="muted">Total</span><b>${money(draft.promo ? draft.promo.after : p.amount)}<span class="muted" style="font-size:14px;font-weight:500">/${per}</span></b></div>
+      ${priceDeal ? `<div class="line"><span>Deal</span><span style="color:var(--mint)">−${money(a.saving)}</span></div>` : ''}
+      <div class="total"><span class="muted">Total</span><b>${money(total)}<span class="muted" style="font-size:14px;font-weight:500">/${per}</span></b></div>
       <button class="btn primary block" id="mk">${ic('qr', 16)} Create payment link</button>
       ${can('manager') ? `<button class="btn quiet block" id="comp" style="margin-top:8px">${ic('gift', 15)} Give it free (comp)…</button>` : ''}
       <p class="muted" style="font-size:12.5px;margin:10px 0 0">The customer pays on their phone (QR code) or on this screen. The order is created the moment Stripe confirms.</p>`;
@@ -475,7 +506,8 @@
         ${o.region ? `<span>Region</span><span>${esc(o.region)} · ${esc(C.regions[o.region] || '')}${Number(o.tax) ? ` · ${money(o.tax)} tax` : ''}</span>` : ''}
         ${o.gift ? `<span>Gift</span><span>${o.status === 'GIFT' ? `Not claimed yet · code <b class="mono">${esc(o.gift.code)}</b>` : `Claimed ${fmtDay(o.gift.claimed_at)}`} · ${o.gift.months} months for ${esc(o.gift.to_name || '')}${o.gift.from_name ? `, from ${esc(o.gift.from_name)}` : ''}</span>` : ''}
         ${o.referral_code ? `<span>Referral code</span><span class="mono">${esc(o.referral_code)}${o.referrals ? ` <span class="muted">· ${o.referrals} friend${o.referrals === 1 ? '' : 's'}, ${money(o.referral_credit)} credit</span>` : ''}</span>` : ''}
-        ${o.referred_by ? `<span>Referred by</span><span class="mono">${esc(o.referred_by)}</span>` : ''}</div>
+        ${o.referred_by ? `<span>Referred by</span><span class="mono">${esc(o.referred_by)}</span>` : ''}
+        ${o.deals?.length ? `<span>Deals</span><span>${o.deals.map(d => esc(d.headline)).join(' · ')}</span>` : ''}</div>
       ${(o.history || []).length ? `<label class="lbl">History</label><div class="hist">${o.history.slice().reverse().map(h => `<div><span class="muted">${fmtWhen(h.at)}</span> ${esc(histText(h))}</div>`).join('')}</div>` : ''}
       <label class="lbl">Models</label><div class="chips">${(o.models || []).map(m => `<span>${esc(m)}</span>`).join('') || '<span>—</span>'}</div>
       ${can('manager') && (o.can?.change || o.can?.pause || o.can?.resume || o.can?.cancel || o.can?.keep || o.can?.card) ? `<div class="oacts">
@@ -506,7 +538,7 @@
   }
 
   const histText = h => ({ change: `Changed ${h.from} → ${h.to}${h.due_now ? `, charged ${money(h.due_now)}` : h.credit ? `, ${money(h.credit)} credit` : ''}`, pause: `Paused ${h.months} month${h.months === 1 ? '' : 's'}`,
-    resume: 'Resumed', cancel_at_end: 'Set to cancel at the end of the period', keep: 'Cancel undone', gift_bought: `Bought as a ${h.months}-month gift`, gift_claimed: `Gift claimed by ${h.by || 'them'}`, expired: 'Ended (gift months used up)' }[h.kind] || h.kind) + (h.by && !['gift_claimed'].includes(h.kind) ? ` · ${h.by}` : '');
+    resume: 'Resumed', code: `Code ${h.code} added${h.label ? ` (${h.label})` : ''}`, contact: 'Contact details updated', cancel_at_end: 'Set to cancel at the end of the period', keep: 'Cancel undone', gift_bought: `Bought as a ${h.months}-month gift`, gift_claimed: `Gift claimed by ${h.by || 'them'}`, expired: 'Ended (gift months used up)' }[h.kind] || h.kind) + (h.by && !['gift_claimed'].includes(h.kind) ? ` · ${h.by}` : '');
   function receiptSheet(orderId, email) {
     sheet(`<div class="kicker">Receipt</div><h3>Email the receipt for ${esc(orderId)}</h3>
       <p class="muted" style="margin:4px 0 0">Sent from ${esc(S.me ? 'aARgon3' : '')} with your store's name on it.</p>
@@ -992,39 +1024,209 @@
   }
 
   // ================================================================ Promotions (managers)
+  // ================================================================ Promotions: codes (typed in) and deals (automatic)
+  let promoTab = 'codes';
   async function pagePromos() {
     const pg = $('pg');
-    pg.innerHTML = `<div class="h-row"><p class="muted" style="margin:0">Codes customers type in the store, or you apply in New sale. Each one is also a Stripe coupon.</p><span class="sp"></span><button class="btn primary small" id="np">${ic('plus', 15)} New code</button></div>
-      <div class="card tblcard"><table class="tbl"><thead><tr><th>Code</th><th>Discount</th><th>Works on</th><th class="num">Used</th><th>Ends</th><th>Status</th><th></th></tr></thead><tbody id="rows"><tr><td colspan="7" class="empty"><span class="spin"></span></td></tr></tbody></table></div>`;
-    $('np').onclick = promoSheet;
+    pg.innerHTML = `<div class="h-row"><div class="seg" id="ptab"><button data-v="codes" class="${promoTab === 'codes' ? 'on' : ''}">Codes</button><button data-v="deals" class="${promoTab === 'deals' ? 'on' : ''}">Deals</button></div>
+        <span class="sp"></span>${promoTab === 'codes' ? `<button class="btn small" id="gen">${ic('sparkles', 15)} Code generator</button><button class="btn primary small" id="np">${ic('plus', 15)} New code</button>`
+          : `<button class="btn primary small" id="nd">${ic('plus', 15)} New deal</button>`}</div>
+      <p class="muted" style="margin:0 0 12px;font-size:13.5px">${promoTab === 'codes' ? 'Codes customers type in the store, or you apply in New sale. Each one is a Stripe coupon. Codes switch themselves off when they expire or run out.'
+        : 'Deals apply on their own, no code needed, and show on the home page. A price deal doesn\'t stack with a code (the customer gets one discount); bonus models, chip upgrades and extra people always apply.'}</p>
+      <div id="old"></div>
+      <div class="card tblcard"><table class="tbl"><thead>${promoTab === 'codes' ? '<tr><th>Code</th><th>Discount</th><th>Works on</th><th class="num">Used</th><th>Ends</th><th>Status</th><th></th></tr>'
+        : '<tr><th>Deal</th><th>Gives</th><th>Works on</th><th class="num">Used</th><th>Ends</th><th>Status</th><th>Home page</th><th></th></tr>'}</thead><tbody id="rows"><tr><td colspan="8" class="empty"><span class="spin"></span></td></tr></tbody></table></div>`;
+    $('ptab').querySelectorAll('button').forEach(b => b.onclick = () => { promoTab = b.dataset.v; pagePromos(); });
+    const works = x => esc([(x.plans || []).map(p => C.plans[p]?.name || p).join(', ') || 'All plans', (x.tiers || []).map(tierName).join(', ') || 'all tiers',
+      ...(x.billing?.length ? [x.billing.map(b => b === 'year' ? 'yearly' : 'monthly').join('/')] : [])].join(' · '));
+    const state = x => x.old && x.active ? '<span class="pill warn" title="Bring it over to make it work at checkout">OLD CODE</span>' : x.live ? '<span class="pill ok">LIVE</span>' : x.ended_reason === 'expired' ? '<span class="pill dim" title="Switched off automatically">EXPIRED</span>'
+      : x.ended_reason === 'used up' ? '<span class="pill dim" title="Switched off automatically">USED UP</span>' : x.old ? '<span class="pill warn">OLD CODE</span>' : x.active ? '<span class="pill warn">NOT STARTED</span>' : '<span class="pill dim">OFF</span>';
+    if (promoTab === 'deals') {
+      $('nd').onclick = dealSheet;
+      let list; try { list = await api('deals'); } catch (e) { $('rows') && ($('rows').innerHTML = `<tr><td colspan="8" class="empty">${esc(/function|not find|2\.5/i.test(e.message) ? 'Deals need the 2.5 database update.' : e.message)}</td></tr>`); return; }
+      if (!$('rows')) return;
+      $('rows').innerHTML = list.map(d => `<tr><td><b>${esc(d.headline)}</b><div class="muted" style="font-size:12px">${esc([d.name !== d.headline ? d.name : '', d.created_by].filter(Boolean).join(' · '))}</div></td>
+        <td>${esc(dealText(d))}</td><td class="muted">${works(d)}</td><td class="num">${d.used_count}${d.usage_limit ? ` / ${d.usage_limit}` : ''}</td><td class="muted">${d.ends_at ? fmtDate(d.ends_at) : 'Never'}</td>
+        <td>${state(d)}</td><td><label class="switch" title="Show on the home page"><input type="checkbox" data-f="${d.id}" ${d.featured ? 'checked' : ''}></label></td>
+        <td class="num"><label class="switch" title="On / off"><input type="checkbox" data-id="${d.id}" ${d.active ? 'checked' : ''}></label></td></tr>`).join('') || '<tr><td colspan="8" class="empty">No deals yet. Try "2 models for the price of one" for a weekend.</td></tr>';
+      $('rows').querySelectorAll('input[data-id]').forEach(i => i.onchange = () => busy(null, async () => { await api('deal_save', { id: Number(i.dataset.id), active: i.checked }); toast(i.checked ? 'Deal on.' : 'Deal off.'); pagePromos(); }).catch(() => { i.checked = !i.checked; }));
+      $('rows').querySelectorAll('input[data-f]').forEach(i => i.onchange = () => busy(null, async () => { await api('deal_save', { id: Number(i.dataset.f), featured: i.checked }); toast(i.checked ? 'Shown on the home page.' : 'Hidden from the home page (still applies).'); }).catch(() => { i.checked = !i.checked; }));
+      return;
+    }
+    $('np').onclick = () => promoSheet({});
+    $('gen').onclick = generatorSheet;
     let list; try { list = await api('promos'); } catch (e) { $('rows') && ($('rows').innerHTML = `<tr><td colspan="7" class="empty">${esc(e.message)}</td></tr>`); return; }
     if (!$('rows')) return;
-    $('rows').innerHTML = list.map(x => `<tr><td class="id">${esc(x.code)}<div class="muted" style="font-size:11.5px;font-family:var(--sans)">${esc(x.created_by || '')}</div></td><td>${esc(x.description || '')}</td>
-      <td class="muted">${esc([(x.plans || []).map(p => C.plans[p]?.name || p).join(', ') || 'All plans', (x.tiers || []).map(tierName).join(', ') || 'all tiers'].join(' · '))}${Number(x.min_total) ? ` · over ${money(x.min_total)}` : ''}</td>
-      <td class="num">${x.used}${x.limit ? ` / ${x.limit}` : ''}</td><td class="muted">${x.ends ? fmtDate(x.ends) : 'Never'}</td><td>${x.live ? '<span class="pill ok">LIVE</span>' : x.active ? '<span class="pill warn">ENDED</span>' : '<span class="pill dim">OFF</span>'}</td>
-      <td class="num"><label class="switch" title="On / off"><input type="checkbox" data-id="${x.id}" ${x.active ? 'checked' : ''}></label></td></tr>`).join('') || '<tr><td colspan="7" class="empty">No codes yet.</td></tr>';
+    const old = list.filter(x => x.old && x.active);
+    if (old.length) $('old').innerHTML = `<div class="banner">${ic('warning')}<div><b>${old.length} old code${old.length === 1 ? '' : 's'} from the old aARgon3</b> (${old.slice(0, 4).map(x => esc(x.code)).join(', ')}${old.length > 4 ? '…' : ''}) ${old.length === 1 ? "doesn't" : "don't"} work at checkout yet.</div><span style="flex:1"></span><button class="btn small primary" id="upg">Bring them over</button></div>`;
+    $('upg') && ($('upg').onclick = e => busy(e.target, async () => {
+      const r = await api('promo_upgrade');
+      sheet(`<div class="kicker">Old codes</div><h3>${r.filter(x => x.live).length} of ${r.length} work now</h3><div class="ulist">${r.map(x => `<div class="r"><span class="mono">${esc(x.code)}</span><span class="${x.error ? 'err' : x.live ? '' : 'muted'}">${esc(x.result)}</span></div>`).join('')}</div>
+        <div class="acts"><button class="btn primary" data-close>Done</button></div>`);
+      pagePromos();
+    }).catch(() => {}));
+    const batches = {};
+    $('rows').innerHTML = list.map(x => `<tr><td class="id"><span class="codecell"><span>${esc(x.code)}</span><button class="cp" data-copy="${esc(x.code)}" title="Copy">${ic('copy', 14)}</button></span>
+        <div class="muted" style="font-size:11.5px;font-family:var(--sans)">${esc(x.created_by || (x.old ? 'old aARgon3' : ''))}${x.batch ? ` · batch ${esc(x.batch)}` : ''}</div></td><td>${esc(x.description || '')}</td>
+      <td class="muted">${works(x)}${Number(x.min_total) ? ` · over ${money(x.min_total)}` : ''}</td>
+      <td class="num">${x.used}${x.limit ? ` / ${x.limit}` : ''}</td><td class="muted">${x.ends ? fmtDate(x.ends) : 'Never'}</td><td>${state(x)}</td>
+      <td class="num">${x.old ? '' : `<label class="switch" title="On / off"><input type="checkbox" data-id="${x.id}" ${x.active ? 'checked' : ''}></label>`}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">No codes yet. Try the code generator.</td></tr>';
+    $('rows').querySelectorAll('[data-copy]').forEach(b => b.onclick = e => { e.stopPropagation(); copy(b.dataset.copy, `Copied ${b.dataset.copy}`); });
     $('rows').querySelectorAll('input[data-id]').forEach(i => i.onchange = () => busy(null, async () => { await api('promo_save', { id: Number(i.dataset.id), active: i.checked }); toast(i.checked ? 'Code on.' : 'Code off.'); pagePromos(); }).catch(() => { i.checked = !i.checked; }));
   }
-  function promoSheet() {
-    const rand = () => 'APOJI' + Math.random().toString(36).slice(2, 6).toUpperCase();
+  const dealText = d => d.kind === 'percent' ? `${Number(d.value)}% off ${d.duration === 'forever' ? 'every payment' : d.duration === 'repeating' ? `for ${d.duration_months} months` : 'the first payment'}`
+    : d.kind === 'amount' ? `${money(Number(d.value))} off ${d.duration === 'forever' ? 'every payment' : d.duration === 'repeating' ? `for ${d.duration_months} months` : 'the first payment'}`
+    : d.kind === 'models' ? `Free: ${(d.models || []).join(', ')}` : d.kind === 'chip' ? `Chip: ${d.chip}` : `+${Number(d.value)} people`;
+
+  // ---------- the code generator: season, month or occasion → code ideas and dates
+  const OCCASIONS = {
+    '': { label: 'None', words: [] },
+    blackfriday: { label: 'Black Friday', words: ['BLACKFRIDAY', 'BF', 'BFRIDAY'], dates: y => { const t = thanksgiving(y); return [addD(t, 1), addD(t, 3)]; } },
+    cybermonday: { label: 'Cyber Monday', words: ['CYBERMONDAY', 'CYBER', 'CM'], dates: y => { const t = thanksgiving(y); return [addD(t, 4), addD(t, 5)]; } },
+    thanksgiving: { label: 'Thanksgiving', words: ['THANKS', 'GRATEFUL', 'TURKEY'], dates: y => { const t = thanksgiving(y); return [addD(t, -3), t]; } },
+    holiday: { label: 'Holidays', words: ['HOLIDAY', 'MERRY', 'GIFT'], dates: y => [`${y}-12-01`, `${y}-12-31`] },
+    christmas: { label: 'Christmas', words: ['XMAS', 'MERRY', 'JOLLY'], dates: y => [`${y}-12-15`, `${y}-12-25`] },
+    newyear: { label: 'New Year', words: ['NEWYEAR', 'NY', 'FRESHSTART'], dates: y => [`${y}-12-26`, `${y + 1}-01-07`], yearShift: 1 },
+    valentines: { label: "Valentine's Day", words: ['LOVE', 'VALENTINE', 'HEART'], dates: y => [`${y}-02-07`, `${y}-02-14`] },
+    springbreak: { label: 'Spring break', words: ['SPRINGBREAK', 'BREAK'], dates: y => [`${y}-03-01`, `${y}-03-31`] },
+    backtoschool: { label: 'Back to school', words: ['BACK2SCHOOL', 'SCHOOL', 'STUDY'], dates: y => [`${y}-08-01`, `${y}-09-15`] },
+    halloween: { label: 'Halloween', words: ['SPOOKY', 'HALLOWEEN', 'BOO'], dates: y => [`${y}-10-24`, `${y}-10-31`] },
+    launch: { label: 'Launch / new release', words: ['LAUNCH', 'NEW', 'HELLO'], dates: () => [ymd(new Date()), addD(ymd(new Date()), 14)] },
+    birthday: { label: 'aARgon3 birthday', words: ['BIRTHDAY', 'BDAY', 'PARTY'], dates: () => [ymd(new Date()), addD(ymd(new Date()), 7)] },
+  };
+  const SEASONS = { '': ['', null], winter: ['Winter', ['WINTER', 'SNOW', 'FROST']], spring: ['Spring', ['SPRING', 'BLOOM']], summer: ['Summer', ['SUMMER', 'SUNNY', 'HEATWAVE']], fall: ['Fall', ['FALL', 'AUTUMN', 'HARVEST']] };
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const addD = (d, n) => { const x = new Date(`${d}T12:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+  const thanksgiving = y => { const d = new Date(Date.UTC(y, 10, 1)); const first = (4 - d.getUTCDay() + 7) % 7 + 1; return `${y}-11-${String(first + 21).padStart(2, '0')}`; };
+  const seasonDates = (s, y) => ({ winter: [`${y}-12-21`, `${y + 1}-03-19`], spring: [`${y}-03-20`, `${y}-06-20`], summer: [`${y}-06-21`, `${y}-09-22`], fall: [`${y}-09-23`, `${y}-12-20`] }[s]);
+  function codeIdeas({ occasion, season, month, year, value, type }) {
+    const yy = String(year).slice(-2), num = type === 'fixed' ? `${Math.round(value)}OFF` : `${Math.round(value)}`;
+    const words = [...(OCCASIONS[occasion]?.words || []), ...(SEASONS[season]?.[1] || [])];
+    const out = [];
+    const oy = OCCASIONS[occasion]?.yearShift ? String(year + 1).slice(-2) : yy;
+    for (const w of words.slice(0, 4)) out.push(`${w}${OCCASIONS[occasion]?.words.includes(w) ? oy : yy}`, `${w}${num}`, `${w}-${oy || yy}-${num}`);
+    if (month !== '') { const m = MONTHS[+month].toUpperCase(); out.push(`${m.slice(0, 3)}${yy}`, `${m}${num}`, `${m.slice(0, 3)}-SAVE${num.replace('OFF', '')}`); }
+    if (!out.length) out.push(`SAVE${num}`, `APOJI${num}`, `ARGON${yy}`);
+    return [...new Set(out.map(c => c.replace(/[^A-Z0-9_-]/g, '')).filter(c => c.length >= 3 && c.length <= 24))].slice(0, 9);
+  }
+  function generatorSheet() {
+    const now = new Date(), y0 = now.getFullYear();
+    const st = { occasion: now.getMonth() === 10 ? 'blackfriday' : '', season: '', month: '', year: y0, value: 20, type: 'percentage', code: '', starts: '', ends: '', count: 1 };
+    sheet(`<div class="kicker">Promotions</div><h3>Code generator</h3>
+      <p class="muted" style="margin:4px 0 0;font-size:13.5px">Pick an occasion, season or month. You get code ideas and the dates filled in.</p>
+      <div class="grid2" style="margin-top:6px"><div><label class="lbl">Occasion</label><select class="field" id="go">${Object.entries(OCCASIONS).map(([k, o]) => `<option value="${k}" ${k === st.occasion ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select></div>
+        <div><label class="lbl">Season</label><select class="field" id="gs">${Object.entries(SEASONS).map(([k, s]) => `<option value="${k}">${esc(s[0] || 'None')}</option>`).join('')}</select></div>
+        <div><label class="lbl">Month</label><select class="field" id="gm"><option value="">None</option>${MONTHS.map((m, i) => `<option value="${i}">${m}</option>`).join('')}</select></div>
+        <div><label class="lbl">Year</label><input class="field" id="gy" type="number" min="${y0}" max="${y0 + 3}" value="${y0}"></div></div>
+      <div class="grid2"><div><label class="lbl">Discount</label><div class="row"><input class="field" id="gv" type="number" min="1" style="flex:1" value="20"><select class="field" id="gt" style="width:auto"><option value="percentage">% off</option><option value="fixed">$ off</option></select></div></div>
+        <div><label class="lbl">How many codes</label><select class="field" id="gc"><option value="1">One shared code</option>${[5, 10, 25, 50].map(n => `<option value="${n}">${n} single-use codes</option>`).join('')}</select></div></div>
+      <label class="lbl">Ideas <span style="opacity:.6">(tap one)</span></label><div class="ideas" id="gi"></div>
+      <label class="lbl" id="gcl">Code</label><input class="field mono" id="gcode" style="text-transform:uppercase" maxlength="30">
+      <div class="grid2"><div><label class="lbl">Starts</label><input class="field" id="gst" type="date"></div><div><label class="lbl">Ends</label><input class="field" id="gen2" type="date"></div></div>
+      <p class="muted" id="gnote" style="font-size:12.5px;margin:8px 0 0"></p>
+      <div class="acts"><button class="btn quiet" data-close>Cancel</button><button class="btn" id="more">More options…</button><button class="btn primary" id="ok">${ic('sparkles', 15)} Create</button></div>`,
+      (el, close) => {
+        const q = x => el.querySelector(x);
+        const paint = () => {
+          Object.assign(st, { occasion: q('#go').value, season: q('#gs').value, month: q('#gm').value, year: Number(q('#gy').value) || y0, value: Number(q('#gv').value) || 0, type: q('#gt').value, count: Number(q('#gc').value) });
+          const ideas = codeIdeas(st);
+          q('#gi').innerHTML = ideas.map(c => `<button type="button" class="idea ${c === st.code ? 'on' : ''}">${esc(c)}</button>`).join('');
+          q('#gi').querySelectorAll('.idea').forEach(b => b.onclick = () => { st.code = b.textContent; q('#gcode').value = st.code; paint(); });
+          if (!st.code || !ideas.includes(st.code) && !q('#gcode').matches(':focus')) { st.code = ideas[0] || ''; q('#gcode').value = st.code; q('#gi').firstElementChild?.classList.add('on'); }
+          const o = OCCASIONS[st.occasion];
+          const d = o?.dates ? o.dates(st.year) : st.season ? seasonDates(st.season, st.year) : st.month !== '' ? [`${st.year}-${String(+st.month + 1).padStart(2, '0')}-01`, ymd(new Date(st.year, +st.month + 1, 0))] : null;
+          if (d) { q('#gst').value = d[0] < ymd(new Date()) ? ymd(new Date()) : d[0]; q('#gen2').value = d[1]; }
+          q('#gcl').textContent = st.count > 1 ? 'Codes start with' : 'Code';
+          q('#gnote').textContent = st.count > 1 ? `Makes ${st.count} codes like ${q('#gcode').value || 'CODE'}-7K2P, each usable once. Good for giveaways.` : 'One code anyone can use until it ends. It switches itself off after the end date.';
+        };
+        ['#go', '#gs', '#gm', '#gy', '#gv', '#gt', '#gc'].forEach(x => q(x).onchange = () => { st.code = ''; paint(); });
+        q('#gv').oninput = () => { st.code = ''; paint(); };
+        q('#gcode').oninput = () => { st.code = q('#gcode').value.toUpperCase(); };
+        paint();
+        q('#more').onclick = () => { close(); promoSheet({ code: q('#gcode').value, value: st.value, type: st.type, starts: q('#gst').value, ends: q('#gen2').value, count: st.count }); };
+        q('#ok').onclick = e => busy(e.target, async () => {
+          const r = await api('promo_batch', { prefix: q('#gcode').value, count: st.count, type: st.type, value: st.value,
+            starts: q('#gst').value ? new Date(q('#gst').value + 'T00:00').toISOString() : null, ends: q('#gen2').value ? new Date(q('#gen2').value + 'T23:59').toISOString() : null });
+          close(); promoTab = 'codes'; pagePromos(); codesMadeSheet(r);
+        }).catch(() => {});
+      });
+  }
+  function codesMadeSheet(r) {
+    const text = r.map(x => x.code).join('\n');
+    sheet(`<div class="kicker">Done</div><h3>${r.length === 1 ? `${esc(r[0].code)} is live` : `${r.length} codes are live`}</h3>
+      <p class="muted" style="margin:4px 0 0">${esc(r[0].description || '')}${r[0].ends ? ` · ends ${fmtDate(r[0].ends)}` : ''}</p>
+      <div class="ulist">${r.map(x => `<div class="r"><span class="mono">${esc(x.code)}</span><button class="cp" data-copy="${esc(x.code)}">${ic('copy', 14)}</button></div>`).join('')}</div>
+      <div class="acts">${r.length > 1 ? `<button class="btn" id="all">${ic('copy', 15)} Copy all</button>` : ''}<button class="btn primary" data-close>Done</button></div>`,
+      el => { el.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copy(b.dataset.copy, `Copied ${b.dataset.copy}`)); const a = el.querySelector('#all'); if (a) a.onclick = () => copy(text, `Copied ${r.length} codes`); });
+  }
+  function promoSheet(pre = {}) {
     sheet(`<div class="kicker">Promotions</div><h3>New promo code</h3>
-      <div class="grid2"><div><label class="lbl">Code</label><div class="fgen"><input class="field" id="code" style="text-transform:uppercase" maxlength="30" placeholder="SUMMER25"><button class="btn small" id="gen">Make one</button></div></div>
-        <div><label class="lbl">Discount</label><div class="row"><input class="field" id="val" type="number" min="1" style="flex:1" value="20"><select class="field" id="type" style="width:auto"><option value="percentage">% off</option><option value="fixed">$ off</option></select></div></div></div>
+      <div class="grid2"><div><label class="lbl">${pre.count > 1 ? 'Codes start with' : 'Code'}</label><input class="field mono" id="code" style="text-transform:uppercase" maxlength="30" placeholder="SUMMER25" value="${esc(pre.code || '')}"></div>
+        <div><label class="lbl">Discount</label><div class="row"><input class="field" id="val" type="number" min="1" style="flex:1" value="${pre.value || 20}"><select class="field" id="type" style="width:auto"><option value="percentage">% off</option><option value="fixed" ${pre.type === 'fixed' ? 'selected' : ''}>$ off</option></select></div></div></div>
       <div class="grid2"><div><label class="lbl">For how long</label><select class="field" id="dur"><option value="once">First payment only</option><option value="repeating">A number of months</option><option value="forever">Every payment</option></select></div>
         <div id="monthsBox" hidden><label class="lbl">Months</label><input class="field" id="months" type="number" min="1" max="36" value="3"></div></div>
       <label class="lbl">Plans (none ticked = all)</label><div class="chk" id="pls">${PLANS.filter(p => !C.plans[p].quote).map(p => `<label><input type="checkbox" value="${p}">${esc(C.plans[p].name)}</label>`).join('')}</div>
       <label class="lbl">Tiers (none ticked = all)</label><div class="chk" id="trs">${TIERS.map(t => `<label><input type="checkbox" value="${t}">${esc(C.tiers[t].name)}</label>`).join('')}</div>
-      <div class="grid3"><div><label class="lbl">Use limit</label><input class="field" id="lim" type="number" min="1" placeholder="No limit"></div><div><label class="lbl">Ends</label><input class="field" id="ends" type="date" min="${ymd(new Date())}"></div><div><label class="lbl">Order over</label><div class="money-in"><input class="field" id="min" type="number" min="0" placeholder="0"></div></div></div>
-      <div class="acts"><button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="ok">${ic('promos', 15)} Create code</button></div>`,
+      <div class="grid2"><div><label class="lbl">How many codes</label><select class="field" id="cnt"><option value="1">One shared code</option>${[5, 10, 25, 50].map(n => `<option value="${n}" ${pre.count === n ? 'selected' : ''}>${n} single-use codes</option>`).join('')}</select></div>
+        <div><label class="lbl">Use limit <span style="opacity:.6">(shared code)</span></label><input class="field" id="lim" type="number" min="1" placeholder="No limit"></div></div>
+      <div class="grid3"><div><label class="lbl">Starts</label><input class="field" id="sts" type="date" value="${esc(pre.starts || '')}"></div><div><label class="lbl">Ends</label><input class="field" id="ends" type="date" min="${ymd(new Date())}" value="${esc(pre.ends || '')}"></div><div><label class="lbl">Order over</label><div class="money-in"><input class="field" id="min" type="number" min="0" placeholder="0"></div></div></div>
+      <div class="acts"><button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="ok">${ic('promos', 15)} Create</button></div>`,
       (el, close) => {
         const q = s => el.querySelector(s);
-        q('#gen').onclick = () => q('#code').value = rand();
         q('#dur').onchange = () => q('#monthsBox').hidden = q('#dur').value !== 'repeating';
         q('#ok').onclick = e => busy(e.target, async () => {
-          const r = await api('promo_save', { code: q('#code').value, type: q('#type').value, value: Number(q('#val').value), duration: q('#dur').value, duration_months: Number(q('#months').value),
-            plans: [...q('#pls').querySelectorAll('input:checked')].map(i => i.value), tiers: [...q('#trs').querySelectorAll('input:checked')].map(i => i.value),
-            limit: q('#lim').value || null, ends: q('#ends').value ? new Date(q('#ends').value + 'T23:59').toISOString() : null, min_total: Number(q('#min').value) || 0 });
-          close(); toast(`${r.code} is live: ${r.description}.`, 'ok'); pagePromos();
+          const r = await api('promo_batch', { prefix: q('#code').value, count: Number(q('#cnt').value), type: q('#type').value, value: Number(q('#val').value), duration: q('#dur').value, duration_months: Number(q('#months').value),
+            plans: [...q('#pls').querySelectorAll('input:checked')].map(i => i.value), tiers: [...q('#trs').querySelectorAll('input:checked')].map(i => i.value), limit: q('#lim').value || null,
+            starts: q('#sts').value ? new Date(q('#sts').value + 'T00:00').toISOString() : null, ends: q('#ends').value ? new Date(q('#ends').value + 'T23:59').toISOString() : null, min_total: Number(q('#min').value) || 0 });
+          close(); pagePromos(); codesMadeSheet(r);
+        }).catch(() => {});
+      });
+  }
+  function dealSheet() {
+    const KINDS = [['models', 'Bonus models', '2 for the price of 1'], ['percent', '% off', 'automatic discount'], ['amount', '$ off', 'automatic discount'], ['chip', 'Chip upgrade', 'a better Quouk chip'], ['seats', 'Extra people', 'more seats']];
+    let kind = 'models';
+    sheet(`<div class="kicker">Deals</div><h3>New deal</h3>
+      <div class="kinds" id="dk">${KINDS.map(([k, l, s]) => `<button type="button" data-k="${k}" class="${k === kind ? 'on' : ''}"><b>${l}</b><small>${s}</small></button>`).join('')}</div>
+      <div id="dbody"></div>
+      <label class="lbl">Works on</label><div class="chk" id="dpl">${PLANS.filter(p => !C.plans[p].quote).map(p => `<label><input type="checkbox" value="${p}">${esc(C.plans[p].name)}</label>`).join('')}</div>
+      <div class="chk" id="dtr" style="margin-top:6px">${TIERS.map(t => `<label><input type="checkbox" value="${t}">${esc(C.tiers[t].name)}</label>`).join('')}</div>
+      <div class="chk" id="dbl" style="margin-top:6px"><label><input type="checkbox" value="month">Monthly</label><label><input type="checkbox" value="year">Yearly</label></div>
+      <p class="muted" style="font-size:12px;margin:4px 0 0">None ticked in a row = all of them.</p>
+      <label class="lbl">Headline customers see</label><input class="field" id="dh" maxlength="90">
+      <label class="lbl">More detail <span style="opacity:.6">(optional)</span></label><input class="field" id="dd" maxlength="300" placeholder="e.g. This weekend only, while it lasts.">
+      <div class="grid3"><div><label class="lbl">Starts</label><input class="field" id="ds" type="date" value="${ymd(new Date())}"></div><div><label class="lbl">Ends</label><input class="field" id="de" type="date" min="${ymd(new Date())}"></div><div><label class="lbl">Use limit</label><input class="field" id="dl" type="number" min="1" placeholder="No limit"></div></div>
+      <label class="switch" style="margin-top:10px"><input type="checkbox" id="df" checked> Show it on the home page</label>
+      <div class="acts"><button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="ok">${ic('sparkles', 15)} Start the deal</button></div>`,
+      (el, close) => {
+        const q = s => el.querySelector(s);
+        let touched = false;
+        const ticked = id => [...q(id).querySelectorAll('input:checked')].map(i => i.value);
+        const suggest = () => {
+          if (touched) return;
+          const tiers = ticked('#dtr').map(tierName), on = tiers.length ? ` with ${tiers.join(' or ')}` : '';
+          const models = [...el.querySelectorAll('#dm input:checked')].map(i => i.value);
+          q('#dh').value = kind === 'models' ? (models.length ? `${models.length === 1 ? models[0] : `${models.slice(0, -1).join(', ')} and ${models.at(-1)}`} free${on}` : '')
+            : kind === 'percent' ? `${q('#dv')?.value || 20}% off${on}` : kind === 'amount' ? `${money(Number(q('#dv')?.value || 5))} off${on}` : kind === 'chip' ? `Free upgrade to the ${q('#dc')?.value || ''} chip${on}` : `${q('#dv')?.value || 2} extra people free${on}`;
+        };
+        const body = () => {
+          q('#dbody').innerHTML = kind === 'models' ? `<label class="lbl">Bonus models (added free on top of the tier)</label><div class="dm" id="dm">${Object.entries(C.families).filter(([k, f]) => !f.free && !TIERS.every(t => C.tiers[t].families.includes(k))).map(([k, f]) => `<div><b>${esc(f.name)}</b>${f.models.map(m => `<label><input type="checkbox" value="${esc(m)}">${esc(m)}</label>`).join('')}</div>`).join('')}</div>`
+            : kind === 'chip' ? `<label class="lbl">They get</label><select class="field" id="dc">${C.chips.filter(c => c.id !== 'No order').map(c => `<option>${esc(c.id)}</option>`).join('')}</select>`
+            : `<div class="grid2"><div><label class="lbl">${kind === 'seats' ? 'Extra people' : kind === 'percent' ? 'Percent off' : 'Dollars off'}</label><input class="field" id="dv" type="number" min="1" value="${kind === 'seats' ? 2 : kind === 'percent' ? 20 : 5}"></div>
+              ${kind === 'seats' ? '' : `<div><label class="lbl">For how long</label><select class="field" id="ddur"><option value="once">First payment</option><option value="repeating">3 months</option><option value="forever">Every payment</option></select></div>`}</div>`;
+          q('#dbody').querySelectorAll('input, select').forEach(i => i.addEventListener('input', suggest));
+          suggest();
+        };
+        q('#dk').querySelectorAll('button').forEach(b => b.onclick = () => { kind = b.dataset.k; q('#dk').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); body(); });
+        ['#dpl', '#dtr', '#dbl'].forEach(id => q(id).addEventListener('change', suggest));
+        q('#dh').oninput = () => touched = true;
+        body();
+        q('#ok').onclick = e => busy(e.target, async () => {
+          const dur = q('#ddur')?.value || 'once';
+          await api('deal_save', { kind, headline: q('#dh').value, description: q('#dd').value, value: Number(q('#dv')?.value) || null, duration: dur, duration_months: dur === 'repeating' ? 3 : null,
+            models: [...el.querySelectorAll('#dm input:checked')].map(i => i.value), chip: q('#dc')?.value, plans: ticked('#dpl'), tiers: ticked('#dtr'), billing: ticked('#dbl'),
+            starts_at: q('#ds').value ? new Date(q('#ds').value + 'T00:00').toISOString() : null, ends_at: q('#de').value ? new Date(q('#de').value + 'T23:59').toISOString() : null,
+            limit: q('#dl').value || null, featured: q('#df').checked });
+          close(); promoTab = 'deals'; toast('Deal started.', 'ok'); pagePromos();
         }).catch(() => {});
       });
   }

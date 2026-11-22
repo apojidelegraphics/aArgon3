@@ -19,6 +19,7 @@ export function world({ legacy = false } = {}) {
     staff: [{ id: 9, user_id: null, email: 'casey@shop.co', role: 'employee', active: true, display_name: 'Casey', pay_rate: 14 }],
     schedule: [], timeoff: [], quotes: {}, promos: [], points: [], lateNext: 0,
     // 2.4
+    deals: [], customers: {}, promoCodesStripe: [],
     subs: {}, subUpdates: [], credits: [], taxRates: {}, archivedTax: [], emails: [], emailFail: null, attempts: [], closures: [], referrals: [], abandoned: [], invoiceList: [], settings: { store: { open: true, message: '' }, business: { name: 'Apoji Delegraphics' }, goals: { monthly_revenue: 0 } } };
   w.stores = [{ code: '0028', name: 'Neo Silicon Valley Flagship (Hub Zero)', region: 'A', active: true }, { code: '2710', name: 'San Francisco Soar Node', region: 'A', active: true },
     { code: '0427', name: 'Raleigh-Durham Omni-Node', region: 'B', active: true }, { code: '0001', name: 'Apoji Corporate Office NC', region: 'E', active: true }];
@@ -43,7 +44,7 @@ export function world({ legacy = false } = {}) {
     paid_total: (o.amount_cents || 0) / 100, payments: 1,
     region: o.region || null, tax: (o.tax_cents || 0) / 100, current_period_end: o.current_period_end || null, cancel_at: o.cancel_at || null, paused_until: o.paused_until || null,
     expires_at: o.expires_at || null, referral_code: o.referral_code || null, referred_by: o.referred_by || null, gift: o.gift || null, history: o.history || [],
-    stripe_customer: !!o.stripe_customer_id, referrals: w.referrals.filter(r => r.referrer_order === o.order_id).length,
+    stripe_customer: !!o.stripe_customer_id, deals: o.deals || null, company_name: o.company_name || '', customer_phone: o.customer_phone || '', customer_info: o.customer_info || null, referrals: w.referrals.filter(r => r.referrer_order === o.order_id).length,
     referral_credit: w.referrals.filter(r => r.referrer_order === o.order_id).reduce((m, r) => m + r.credit_cents, 0) / 100 });
   // a subscription the way Stripe returns it (2024-06-20)
   w.sub = id => { const x = w.subs[id] || (w.subs[id] = { id, status: 'active', customer: 'cus_1', current_period_end: Math.floor(Date.now() / 1000) + 20 * 864e2, cancel_at_period_end: false, pause_collection: null,
@@ -78,8 +79,15 @@ export function world({ legacy = false } = {}) {
         if (f.has('pause_collection')) live.pause_collection = null;
         if (f.get('pause_collection[behavior]')) live.pause_collection = { behavior: f.get('pause_collection[behavior]'), resumes_at: +f.get('pause_collection[resumes_at]') };
         if (f.has('cancel_at_period_end')) live.cancel_at_period_end = f.get('cancel_at_period_end') === 'true';
+        if (f.get('promotion_code')) { live.promotion_code = f.get('promotion_code'); live.discountOff = 500; }
         if (f.get('items[0][price_data][unit_amount]')) live.items.data[0].price = { unit_amount: +f.get('items[0][price_data][unit_amount]'), recurring: { interval: f.get('items[0][price_data][recurring][interval]') }, product: f.get('items[0][price_data][product]') };
         return res(w.sub(x.id));
+      }
+      if (p === 'invoices/upcoming' && !u.searchParams.has('subscription_items[0][id]')) {   // the next bill, as it stands
+        const x = w.sub(u.searchParams.get('subscription')), amt = x.items.data[0].price.unit_amount, bal = w.customers[u.searchParams.get('customer')]?.balance || 0;
+        const disc = x.discountOff || 0, used = Math.min(-bal, amt - disc);
+        return res({ subtotal: amt, total: amt - disc, tax: 0, amount_due: amt - disc - Math.max(0, used), starting_balance: bal, ending_balance: bal + Math.max(0, used),
+          total_discount_amounts: disc ? [{ amount: disc }] : [], next_payment_attempt: x.current_period_end });
       }
       if (p === 'invoices/upcoming') {
         const x = w.sub(u.searchParams.get('subscription')), old = x.items.data[0].price.unit_amount, nu = +u.searchParams.get('subscription_items[0][price_data][unit_amount]');
@@ -95,7 +103,14 @@ export function world({ legacy = false } = {}) {
       if (p.startsWith('subscriptions/') && method === 'DELETE') return res({ id: 'sub_1', status: 'canceled' });
       if (p === 'refunds') return res({ id: 're_1', amount: 2500 });
       if (p === 'coupons') { const id = 'co_' + f.get('name').replace(/\W+/g, '_') + (f.get('metadata[a3_ref]') ? '_' + crypto.randomBytes(2).toString('hex') : ''); (w.coupons = w.coupons || {})[id] = +f.get('amount_off') || 0; return res({ id, percent_off: f.get('percent_off'), amount_off: f.get('amount_off') }); }
-      if (p === 'promotion_codes') return res({ id: 'promo_' + f.get('code'), code: f.get('code'), coupon: f.get('coupon') });
+      if (p === 'promotion_codes' && method === 'POST') {
+        if (w.promoCodesStripe.includes(f.get('code'))) return res({ error: { message: `An active promotion code with \`code: ${f.get('code')}\` already exists.` } }, 400);
+        w.promoCodesStripe.push(f.get('code'));
+        return res({ id: 'promo_' + f.get('code'), code: f.get('code'), coupon: f.get('coupon'), max_redemptions: f.get('max_redemptions'), expires_at: f.get('expires_at') });
+      }
+      if (p === 'promotion_codes' && method === 'GET') return res({ data: w.promoCodesStripe.includes(u.searchParams.get('code')) ? [{ id: 'promo_' + u.searchParams.get('code'), code: u.searchParams.get('code') }] : [] });
+      if (/^customers\/[^/]+$/.test(p) && method === 'GET') return res({ id: p.split('/')[1], balance: w.customers[p.split('/')[1]]?.balance || 0 });
+      if (/^customers\/[^/]+$/.test(p) && method === 'POST') { (w.customers[p.split('/')[1]] = w.customers[p.split('/')[1]] || {}).name = f.get('name'); return res({ id: p.split('/')[1] }); }
       if (p.startsWith('promotion_codes/')) return res({ id: p.split('/')[1], active: f.get('active') === 'true' });
       if (p === 'customers') return res({ id: 'cus_' + crypto.randomBytes(3).toString('hex'), email: f.get('email') });
       if (p === 'products') return res({ id: 'prod_1', name: f.get('name') });
@@ -226,9 +241,25 @@ export function world({ legacy = false } = {}) {
         // ---- promotions
         case 'a3_promos': return res(w.promos);
         case 'a3_promo': return res(w.promos.find(x => x.code === a.p_code) || null);
-        case 'a3_promo_save': { const p = a.p; if (p.id) { const x = w.promos.find(y => y.id === p.id); if ('active' in p) x.active = x.live = p.active; return res(x); }
+        case 'a3_promo_save': { const p = a.p; if (p.id) { const x = w.promos.find(y => y.id === p.id); if ('active' in p) { x.active = x.live = p.active; x.ended_reason = p.active ? null : 'manual'; } return res(x); }
           const x = { id: w.promos.length + 1, code: p.code, type: p.type, value: p.value, duration: p.duration, duration_months: p.duration_months, plans: p.plans, tiers: p.tiers, min_total: p.min_total,
-            limit: p.limit, used: 0, active: true, live: true, stripe_promo_id: p.stripe_promo_id, description: p.description, created_by: p.created_by }; w.promos.push(x); return res(x); }
+            limit: p.limit, used: 0, active: true, live: true, stripe_promo_id: p.stripe_promo_id, description: p.description, created_by: p.created_by, batch: p.batch || null, ends: p.ends || null, old: false };
+          if (w.promos.some(y => y.code === x.code)) return oops('That code already exists.'); w.promos.push(x); return res(x); }
+        case 'a3_promo_upgrade': { const x = w.promos.find(y => y.id === a.p_id); const p = a.p;
+          Object.assign(x, { code: p.code || x.code, type: p.type || x.type, value: p.value ?? x.value, plans: p.plans ?? x.plans, tiers: p.tiers ?? x.tiers, description: p.description || x.description,
+            stripe_promo_id: p.stripe_promo_id || x.stripe_promo_id, migrated_at: now() });
+          if (p.active === false) { x.active = x.live = false; x.ended_reason = p.ended_reason || 'expired'; } else if (p.active) { x.active = true; x.live = true; }
+          x.old = !x.stripe_promo_id; return res({ ...x }); }
+        // ---- 2.5 deals
+        case 'a3_deals': return res(w.deals.map(d => ({ ...d, live: !!d.active && (!d.ends_at || new Date(d.ends_at) > new Date()), stripe_coupon_id: undefined, has_coupon: !!d.stripe_coupon_id })));
+        case 'a3_deals_live': return res(w.deals.filter(d => d.active && (!d.ends_at || new Date(d.ends_at) > new Date())).map(d => ({ ...d, live: true })));
+        case 'a3_deal_save': { const p = a.p;
+          if (p.id) { const d = w.deals.find(x => x.id === p.id); if ('active' in p) { d.active = p.active; d.ended_reason = p.active ? null : 'manual'; } if ('featured' in p) d.featured = p.featured; return res({ ...d, live: d.active }); }
+          const d = { ...p, id: w.deals.length + 1, active: true, used_count: 0, usage_limit: p.limit || null, created_by: p.by }; w.deals.push(d); return res({ ...d, live: true, stripe_coupon_id: undefined }); }
+        case 'a3_deals_used': for (const d of w.deals) if (a.p_ids.includes(d.id)) d.used_count++; return res(null);
+        case 'a3_order_patch_deals': w.orders[a.p_order].deals = a.p_deals; return res(null);
+        case 'a3_order_contact': { const o = w.orders[a.p_order]; const p = a.p; o.customer_name = `${p.first} ${p.last || ''}`.trim(); if ('phone' in p) o.customer_phone = p.phone; if ('company' in p) o.company_name = p.company;
+          o.customer_info = { ...(o.customer_info || {}), ...p }; delete o.customer_info.email; (o.history = o.history || []).push({ kind: 'contact', by: 'customer', at: now() }); return res(orderJson(o)); }
         // ---- settings & stores
         case 'a3_settings': return res(w.settings);
         case 'a3_setting_set': w.settings[a.p_key] = a.p_value; return res(w.settings);

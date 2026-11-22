@@ -324,3 +324,24 @@ body.desktop.win .top { padding-right: 150px; }
 .hrow .field { padding: 7px 10px; } .hrow:has(.hopen:not(:checked)) input[type=time] { opacity: .35; pointer-events: none; }
 label.mini { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); } label.mini input { accent-color: var(--accent); }
 @media (max-width: 760px) { .arow { grid-template-columns: 1fr auto; } .arow > span:nth-child(2) { grid-column: 1 / -1; grid-row: 2; } .hrow { grid-template-columns: 34px 62px 1fr 14px 1fr; gap: 6px; } .hrow .field { padding: 6px; font-size: 13px; } }
+
+/* ================================================================ 2.5 */
+.codecell { display: inline-flex; align-items: center; gap: 6px; }
+.cp { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--line); background: rgba(0,0,0,.2); color: var(--muted); cursor: pointer; padding: 0; }
+.cp:hover { color: var(--accent); border-color: rgba(var(--rgb), .4); }
+.finder { margin-top: 8px; border: 1px solid var(--line2); border-radius: 14px; background: rgba(0,0,0,.22); padding: 4px; max-height: 320px; overflow-y: auto; }
+.fcode { display: grid; grid-template-columns: auto 1fr auto auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; }
+.fcode:hover { background: rgba(var(--rgb), .05); } .fcode .fd { font-size: 13px; color: var(--muted); } .fcode .fa { font-weight: 700; }
+.fcode.off { grid-template-columns: auto 1fr auto; opacity: .7; } .finder details summary { cursor: pointer; padding: 8px 10px; font-size: 13px; color: var(--muted); }
+.fdeal { display: flex; gap: 8px; align-items: flex-start; padding: 9px 10px; font-size: 13px; color: var(--text); background: rgba(177,140,255,.08); border-radius: 10px; margin-bottom: 4px; } .fdeal .ic { color: var(--violet); flex: none; margin-top: 2px; }
+.dealtags { display: flex; flex-wrap: wrap; gap: 6px; margin: -2px 0 10px; } .dealtags .pill { display: inline-flex; gap: 4px; align-items: center; text-transform: none; letter-spacing: 0; font-family: var(--sans); font-size: 12px; }
+.ideas { display: flex; flex-wrap: wrap; gap: 6px; min-height: 34px; }
+.idea { font: 700 13px var(--mono); padding: 6px 10px; border-radius: 10px; border: 1px solid var(--line2); background: rgba(0,0,0,.2); color: var(--text); cursor: pointer; }
+.idea:hover { border-color: rgba(var(--rgb), .4); } .idea.on { border-color: var(--accent); background: rgba(var(--rgb), .12); color: var(--accent); }
+.kinds { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin: 8px 0 4px; }
+.kinds button { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; border-radius: 12px; border: 1px solid var(--line2); background: rgba(0,0,0,.2); color: var(--text); cursor: pointer; font: inherit; text-align: left; }
+.kinds button b { font-size: 13.5px; } .kinds button small { font-size: 11px; color: var(--muted); } .kinds button.on { border-color: var(--violet); background: rgba(177,140,255,.1); }
+.dm { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; } .dm > div { border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; }
+.dm b { display: block; font-size: 13px; margin-bottom: 4px; } .dm label { display: flex; gap: 6px; align-items: center; font-size: 13px; padding: 2px 0; } .dm input { accent-color: var(--accent); }
+.ulist { display: grid; gap: 2px; margin-top: 12px; max-height: 320px; overflow-y: auto; } .ulist .r { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 7px 2px; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+@media (max-width: 760px) { .kinds { grid-template-columns: repeat(2, 1fr); } .fcode { grid-template-columns: 1fr auto; } .fcode .fd { grid-column: 1 / -1; grid-row: 2; } .fcode .fa { display: none; } }

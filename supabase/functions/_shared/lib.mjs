@@ -86,14 +86,16 @@ const sid = v => (typeof v === 'string' ? v : v?.id) || null;
 // Everything about one order travels to Stripe as metadata (so the receipt, the webhook and the thank-you page all agree)
 // and comes back from it in fulfill(). Stripe allows 50 keys of up to 500 characters each.
 const CUSTOMER_KEYS = ['first', 'last', 'email', 'phone', 'company', 'title', 'node', 'jurisdiction', 'billing_email'];
-function toMeta({ orderId, sel, customer = {}, staff = null, custom = null, promo = null, region = null, gift = null, followup = false }) {
+function toMeta({ orderId, sel, customer = {}, staff = null, custom = null, promo = null, region = null, gift = null, followup = false, deals = null }) {
   const m = { a3_order: orderId, a3_plan: sel.plan, a3_tier: sel.tier, a3_billing: sel.billing, a3_os: sel.os, a3_connection: sel.connection,
     a3_source: custom ? 'custom' : staff ? 'terminal' : 'web', a3_staff: staff?.id, a3_operator: staff?.name, a3_shift: staff?.shiftId,
     a3_promo: promo && promo.kind !== 'referral' ? promo.code : undefined, a3_ref: promo?.kind === 'referral' ? promo.code : undefined,
     a3_region: region || undefined, a3_followup: followup ? '1' : undefined,
     a3_gift: gift ? '1' : undefined, a3_gift_months: gift?.months, a3_gift_to: gift?.to_name, a3_gift_to_email: gift?.to_email, a3_gift_from: gift?.from_name,
     a3_gift_msg: gift?.message ? String(gift.message).slice(0, 480) : undefined,
-    a3_quote: custom?.quote_no, a3_seats: custom?.seats, a3_chip: custom?.chip,
+    a3_quote: custom?.quote_no, a3_seats: custom?.seats, a3_chip: custom?.chip || deals?.chip || undefined,
+    a3_deals: deals?.applied?.length ? deals.applied.map(d => d.id).join(',') : undefined, a3_bonus: deals?.models?.length ? deals.models.join(',').slice(0, 490) : undefined,
+    a3_seats_add: deals?.seats || undefined,
     a3_models: custom?.models?.length ? custom.models.join(',').slice(0, 490) : undefined, a3_interval: custom?.interval };
   for (const k of CUSTOMER_KEYS) if (customer[k]) m['a3_c_' + k] = String(customer[k]).slice(0, 490);
   for (const k of Object.keys(m)) if (m[k] === undefined || m[k] === null || m[k] === '') delete m[k];
@@ -104,6 +106,7 @@ function fromMeta(m = {}) {
   customer.name = [customer.first, customer.last].filter(Boolean).join(' ');
   return { customer, seats: m.a3_seats ? Number(m.a3_seats) : null, chip: m.a3_chip || null, models: m.a3_models ? m.a3_models.split(',').filter(Boolean) : null,
     quote_no: m.a3_quote || null, promo: m.a3_promo || null, interval: m.a3_interval || null, region: m.a3_region || null, referral: m.a3_ref || null,
+    deals: m.a3_deals ? m.a3_deals.split(',').map(Number).filter(Boolean) : [], bonus: m.a3_bonus ? m.a3_bonus.split(',').filter(Boolean) : [], seatsAdd: Number(m.a3_seats_add) || 0,
     gift: m.a3_gift ? { months: Number(m.a3_gift_months) || 1, to_name: m.a3_gift_to || '', to_email: m.a3_gift_to_email || '', from_name: m.a3_gift_from || '', message: m.a3_gift_msg || '' } : null };
 }
 
@@ -113,10 +116,15 @@ function orderRecord(m, extra) {
   const sel = A3.selection({ plan: m.a3_plan, tier: m.a3_tier, billing: m.a3_billing, os: m.a3_os, connection: m.a3_connection });
   const config = { ...A3.config(sel), ...(x.chip ? { chip: x.chip } : {}), ...(x.seats ? { seats: x.seats } : {}), ...(x.interval === 'once' || x.gift ? { billing: 'once' } : {}),
     ...(x.gift ? { gift_months: x.gift.months } : {}) };
-  const items = x.models ? x.models.map(model => ({ model, price: 0, family: Object.keys(A3.C.families).find(f => A3.C.families[f].models.includes(model)) || 'custom' })) : A3.items(sel.tier);
+  const fam = model => Object.keys(A3.C.families).find(f => A3.C.families[f].models.includes(model)) || 'custom';
+  let items = x.models ? x.models.map(model => ({ model, price: 0, family: fam(model) })) : A3.items(sel.tier);
+  // deals: bonus models on top of what the tier includes
+  for (const model of x.bonus) if (!items.some(i => i.model === model)) items = [...items, { model, price: 0, family: fam(model), deal: true }];
+  const baseSeats = x.seats || A3.price(sel.plan, sel.tier, 'month').seats;
+  if (x.seatsAdd && baseSeats != null) config.seats = baseSeats + x.seatsAdd;
   const c = x.customer;
   return { ...extra, order_id: m.a3_order || newOrderId(), plan_type: A3.C.plans[sel.plan].name, tier: sel.tier, billing: x.interval === 'once' || x.gift ? 'once' : sel.billing,
-    config, items, seats: x.seats || A3.price(sel.plan, sel.tier, 'month').seats, source: m.a3_source || 'web', staff_user_id: m.a3_staff || null,
+    config, items, seats: baseSeats != null && x.seatsAdd ? baseSeats + x.seatsAdd : baseSeats, source: m.a3_source || 'web', staff_user_id: m.a3_staff || null,
     operator: m.a3_operator || null, shift_id: m.a3_shift || null, quote_no: x.quote_no, promo_code: x.promo,
     customer_name: c.name || extra.customer_name || '', customer_email: c.email || extra.customer_email || '', customer_phone: c.phone || extra.customer_phone || '',
     company_name: c.company || '', node_id: c.node || '', target_jurisdiction: c.jurisdiction || '',
@@ -133,13 +141,15 @@ function orderRecord(m, extra) {
 //   region    A–E: picks the tax rate (tax = { stripe_id, rate, label } from taxFor)
 //   gift      { months: 1|3|6|12, to_name, to_email, from_name, message }: a one-time payment the recipient claims with a code
 //   followup  the customer ticked "email me if I don't finish": a reminder if this checkout expires
-export async function startCheckout({ call, siteUrl, sel, customer = {}, staff = null, custom = null, promo = null, region = null, tax = null, gift = null, followup = false, nowSec = Math.floor(Date.now() / 1000) }) {
+//   deals     from applyDeals: price deal (a Stripe coupon, only when no code is used), bonus models, chip, extra people
+export async function startCheckout({ call, siteUrl, sel, customer = {}, staff = null, custom = null, promo = null, region = null, tax = null, gift = null, followup = false, deals = null, nowSec = Math.floor(Date.now() / 1000) }) {
+  if (custom || gift) deals = null;   // deals are for regular orders
   const p = A3.price(sel.plan, sel.tier, sel.billing);
   if (p.quote && !custom) throw new Oops(`Enterprise is quoted for your team. Email ${A3.C.contactEmail} and we'll set it up.`);
   if (gift && (custom || p.quote)) throw new Oops('Gifts are for Personal and Business plans.');
   const orderId = newOrderId(), interval = gift ? 'once' : custom?.interval || p.interval, cents = gift ? giftPrice(sel, gift.months).cents : custom ? custom.amount_cents : p.cents;
   if (!Number.isInteger(cents) || cents < 50) throw new Oops('The price has to be at least $0.50.');
-  const meta = toMeta({ orderId, sel, customer, staff, custom, promo, region, gift, followup: followup && !staff && !custom });
+  const meta = toMeta({ orderId, sel, customer, staff, custom, promo, region, gift, followup: followup && !staff && !custom, deals });
   // a referral is a one-time coupon worth a month of the plan they're buying
   let discounts = promo && promo.kind !== 'referral' ? { 0: { promotion_code: promo.stripe_promo_id } } : undefined;
   if (promo?.kind === 'referral') {
@@ -147,17 +157,19 @@ export async function startCheckout({ call, siteUrl, sel, customer = {}, staff =
       name: 'Referral: 1 month off', metadata: { a3_ref: promo.code, a3_order: orderId } });
     discounts = { 0: { coupon: coupon.id } };
   }
+  if (!discounts && deals?.price?.stripe_coupon_id) discounts = { 0: { coupon: deals.price.stripe_coupon_id } };
   const site = siteUrl.replace(/\/$/, '');
   const seats = custom?.seats || p.seats;
   const name = gift ? `Gift: ${A3.C.plans[sel.plan].name} ${A3.C.tiers[sel.tier].name} for ${gift.months} month${gift.months === 1 ? '' : 's'} · Order ${orderId}`
     : `${A3.label(sel)}${custom?.seats ? ` (${custom.seats} people)` : ''} · Order ${orderId}`;
+  const dealNote = deals?.applied?.length ? ` Deal${deals.applied.length > 1 ? 's' : ''}: ${deals.applied.map(d => d.headline).join('; ')}.` : '';
   const desc = gift ? `For ${gift.to_name || 'someone special'}${gift.from_name ? `, from ${gift.from_name}` : ''}. They claim it with a gift code; the months start when they do.` : custom ? `${A3.C.tiers[sel.tier].tagline} ${seats ? `For ${seats} ${seats === 1 ? 'person' : 'people'}. ` : ''}${sel.os} on ${custom.chip || A3.C.tiers[sel.tier].chip}.${custom.quote_no ? ` Quote ${custom.quote_no}.` : ''}`
     : A3.describe(sel);
   const once = interval === 'once';
   const session = await call('POST', 'checkout/sessions', {
     mode: once ? 'payment' : 'subscription',
     line_items: { 0: { quantity: 1, price_data: { currency: A3.C.currency, unit_amount: cents, ...(once ? {} : { recurring: { interval } }),
-      product_data: { name, description: desc.slice(0, 500) } }, ...(tax?.stripe_id ? { tax_rates: { 0: tax.stripe_id } } : {}) } },
+      product_data: { name, description: (desc + dealNote).slice(0, 500) } }, ...(tax?.stripe_id ? { tax_rates: { 0: tax.stripe_id } } : {}) } },
     customer_email: customer.email || sel.email || undefined,
     ...(discounts ? { discounts } : {}),
     // web checkouts expire after 3 hours (that's when a reminder can go out); staff and custom-order links keep Stripe's 24 hours
@@ -426,6 +438,11 @@ async function afterOrder({ rpc, call, mail, orderId, meta: m, taxCents = 0, sub
     Object.assign(patch, { status: 'GIFT', gift_code: gift.code, gift, event: { kind: 'gift_bought', months: gift.months } });
   }
   await rpc('a3_order_patch', { p_order: orderId, p: patch });
+  if (x.deals.length) {
+    const all = await rpc('a3_deals').catch(() => []);
+    await rpc('a3_deals_used', { p_ids: x.deals }).catch(() => {});
+    await rpc('a3_order_patch_deals', { p_order: orderId, p_deals: all.filter(d => x.deals.includes(d.id)).map(d => ({ id: d.id, headline: d.headline, kind: d.kind })) }).catch(() => {});
+  }
   if (x.referral) await creditReferrer({ rpc, call, code: x.referral, newOrder: orderId, email: email || m.a3_c_email }).catch(e => console.error('[referral]', e));
   if (gift && mail) {
     const to = gift.to_email || gift.from_email;
@@ -565,4 +582,182 @@ export function publicOrder(o, sub = null) {
   out.can = { change: !!o.subscription && !custom && o.status === 'ACTIVE' && !out.cancel_at, pause: !!o.subscription && o.status === 'ACTIVE' && !out.cancel_at,
     resume: o.status === 'PAUSED', cancel: !!o.subscription && ['ACTIVE', 'PAUSED'].includes(o.status) && !out.cancel_at, keep: !!out.cancel_at && o.status !== 'CANCELLED', card: !!o.stripe_customer };
   return out;
+}
+
+// ================================================================ 2.5
+// ---------- deals: automatic offers. Price deals (percent / amount) are a Stripe coupon and don't stack with a code;
+// perks (bonus models, a better chip, extra people) always apply.
+export async function liveDeals(rpc) { return rpc('a3_deals_live').catch(() => []); }   // [] before aargon3-2.5.sql
+export const dealFits = (d, sel) => (!d.plans?.length || d.plans.includes(sel.plan)) && (!d.tiers?.length || d.tiers.includes(sel.tier)) && (!d.billing?.length || d.billing.includes(sel.billing));
+export function dealSaving(d, amount) {
+  if (d.kind === 'percent') return Math.round(amount * Number(d.value)) / 100;
+  if (d.kind === 'amount') return Math.min(amount, Number(d.value));
+  return 0;
+}
+export function dealLabel(d) {
+  const how = d.duration === 'forever' ? 'every payment' : d.duration === 'repeating' ? `for ${d.duration_months} months` : 'the first payment';
+  if (d.kind === 'percent') return `${Number(d.value)}% off ${how}`;
+  if (d.kind === 'amount') return `${A3.money(Number(d.value))} off ${how}`;
+  if (d.kind === 'models') return `${(d.models || []).join(', ')} included free`;
+  if (d.kind === 'chip') return `${d.chip} chip upgrade`;
+  if (d.kind === 'seats') return `${Number(d.value)} extra ${Number(d.value) === 1 ? 'person' : 'people'}`;
+  return d.headline || '';
+}
+// which deals this order gets. `promo` = a code they're using: then no price deal (one discount per order).
+export function applyDeals(deals, sel, { promo = null, amount = null } = {}) {
+  const fit = (deals || []).filter(d => dealFits(d, sel));
+  const base = amount ?? A3.price(sel.plan, sel.tier, sel.billing).amount;
+  const priceDeals = fit.filter(d => (d.kind === 'percent' || d.kind === 'amount') && d.stripe_coupon_id !== null);
+  const price = promo ? null : priceDeals.sort((a, b) => dealSaving(b, base) - dealSaving(a, base))[0] || null;
+  const perks = fit.filter(d => !['percent', 'amount'].includes(d.kind));
+  const tierModels = new Set(A3.items(sel.tier).map(i => i.model));
+  const models = [...new Set(perks.filter(d => d.kind === 'models').flatMap(d => d.models || []))].filter(m => !tierModels.has(m));
+  const chips = perks.filter(d => d.kind === 'chip').map(d => d.chip).filter(c => A3.C.chips.some(x => x.id === c));
+  const chip = chips.sort((a, b) => A3.C.chips.findIndex(x => x.id === b) - A3.C.chips.findIndex(x => x.id === a))[0] || null;
+  const seats = perks.filter(d => d.kind === 'seats').reduce((m, d) => m + (Number(d.value) || 0), 0);
+  const applied = [...(price ? [price] : []), ...perks];
+  return { applied, price, models, chip, seats, saving: price ? dealSaving(price, base) : 0, after: Math.max(0, Math.round((base - (price ? dealSaving(price, base) : 0)) * 100) / 100),
+    skipped: promo ? priceDeals : [] };
+}
+// what the public (store page, terminal) may see about a deal
+export const publicDeal = d => ({ id: d.id, headline: d.headline, description: d.description || '', kind: d.kind, value: d.value != null ? Number(d.value) : null, duration: d.duration,
+  duration_months: d.duration_months, models: d.models || [], chip: d.chip, plans: d.plans || [], tiers: d.tiers || [], billing: d.billing || [], ends_at: d.ends_at, featured: d.featured, label: dealLabel(d) });
+export async function saveDeal({ call, rpc, b, by }) {
+  const kind = ['percent', 'amount', 'models', 'chip', 'seats'].includes(b.kind) ? b.kind : null;
+  if (!kind) throw new Oops('Pick what the deal gives.');
+  const headline = String(b.headline || '').trim().slice(0, 90), name = String(b.name || headline).trim().slice(0, 90);
+  if (headline.length < 3) throw new Oops('Write the headline customers will see.');
+  const value = Number(b.value);
+  if (kind === 'percent' && !(value > 0 && value <= 100)) throw new Oops('Pick a percent between 1 and 100.');
+  if (kind === 'amount' && !(value > 0 && value <= 10000)) throw new Oops('Pick an amount off between $1 and $10,000.');
+  if (kind === 'seats' && !(Number.isInteger(value) && value > 0 && value <= 1000)) throw new Oops('Pick how many extra people (1 to 1000).');
+  const allModels = Object.values(A3.C.families).flatMap(f => f.models);
+  const models = kind === 'models' ? [...new Set((b.models || []).filter(m => allModels.includes(m)))] : null;
+  if (kind === 'models' && !models.length) throw new Oops('Pick at least one bonus model.');
+  const chip = kind === 'chip' ? A3.C.chips.find(c => c.id === b.chip && c.id !== 'No order')?.id : null;
+  if (kind === 'chip' && !chip) throw new Oops('Pick the chip they get.');
+  const duration = ['once', 'repeating', 'forever'].includes(b.duration) ? b.duration : 'once';
+  const months = duration === 'repeating' ? Math.max(1, Math.min(36, Math.round(Number(b.duration_months) || 3))) : null;
+  const when = (v, what) => { if (!v) return null; const d = new Date(v); if (isNaN(d)) throw new Oops(`That ${what} isn't a date.`); return d.toISOString(); };
+  const starts = when(b.starts_at, 'start'), ends = when(b.ends_at, 'end');
+  if (starts && ends && ends <= starts) throw new Oops('The deal has to end after it starts.');
+  let coupon = null;
+  if (kind === 'percent' || kind === 'amount') {
+    coupon = await call('POST', 'coupons', { name: headline.slice(0, 40), duration, ...(months ? { duration_in_months: months } : {}),
+      ...(kind === 'percent' ? { percent_off: value } : { amount_off: Math.round(value * 100), currency: A3.C.currency }), metadata: { a3_deal: '1' } });
+  }
+  return rpc('a3_deal_save', { p: { name, headline, description: String(b.description || '').slice(0, 300), kind, value: ['percent', 'amount', 'seats'].includes(kind) ? value : null,
+    duration, duration_months: months, models, chip, plans: (b.plans || []).filter(p => A3.PLANS.includes(p)), tiers: (b.tiers || []).filter(t => A3.TIERS.includes(t)),
+    billing: (b.billing || []).filter(x => ['month', 'year'].includes(x)), starts_at: starts, ends_at: ends, featured: b.featured !== false,
+    limit: b.limit ? Math.max(1, Math.round(Number(b.limit))) : null, stripe_coupon_id: coupon?.id || null, by } });
+}
+
+// ---------- codes that fit an order (the "find a code" panel on New sale)
+export async function codesFor({ rpc, sel }) {
+  const amount = A3.price(sel.plan, sel.tier, sel.billing).amount;
+  const all = await rpc('a3_promos');
+  return all.filter(x => x.live && x.stripe_promo_id).map(x => {
+    let why = null;
+    if (x.plans?.length && !x.plans.includes(sel.plan)) why = `${A3.C.plans[x.plans[0]]?.name || x.plans[0]}${x.plans.length > 1 ? ' etc.' : ''} only`;
+    else if (x.tiers?.length && !x.tiers.includes(sel.tier)) why = `${x.tiers.map(t => A3.C.tiers[t]?.name || t).join('/')} only`;
+    else if (Number(x.min_total) > 0 && amount < Number(x.min_total)) why = `needs ${A3.money(Number(x.min_total))}+`;
+    return { code: x.code, label: discountLabel(x), description: x.description, ends: x.ends, left: x.limit ? x.limit - x.used : null, fits: !why, why, after: discounted(amount, x), batch: x.batch };
+  }).sort((a, b) => (b.fits - a.fits) || (a.after - b.after));
+}
+
+// ---------- the old aARgon3 codes: tidy them up and give them a Stripe coupon + promotion code
+const tidyCode = c => String(c || '').toUpperCase().trim().replace(/\s+/g, '-').replace(/[^A-Z0-9_-]/g, '').slice(0, 30);
+function oldList(v, keys, names) {
+  const out = [];
+  for (const raw of v || []) {
+    const t = String(raw).trim().toLowerCase();
+    const k = keys.find(x => x === t) || keys.find(x => names(x).toLowerCase() === t);
+    if (k && !out.includes(k)) out.push(k);
+  }
+  return out;
+}
+export async function upgradeOldCode({ call, rpc, x, taken = new Set(), nowMs = Date.now() }) {
+  let code = tidyCode(x.code);
+  if (code.length < 3) code = `OLD-${x.id}`;
+  if (taken.has(code) && code !== x.code) code = `${code.slice(0, 26)}-OLD`;
+  const type = /fix|amount|dollar|flat/i.test(x.type) ? 'fixed' : 'percentage', value = Number(x.value);
+  // old codes listed plans and tiers by name, sometimes mixed together
+  const both = [...(x.plans || []), ...(x.tiers || [])];
+  const plans = oldList(both, A3.PLANS, k => A3.C.plans[k].name), tiers = oldList(both, A3.TIERS, k => A3.C.tiers[k].name);
+  const base = { code, type, value, plans, tiers, duration: x.duration || 'once' };
+  const ended = x.ends && new Date(x.ends).getTime() <= nowMs, usedUp = x.limit && x.used >= x.limit;
+  if (!(value > 0) || (type === 'percentage' && value > 100)) return rpc('a3_promo_upgrade', { p_id: x.id, p: { ...base, active: false, ended_reason: 'invalid' } }).then(r => ({ ...r, result: 'switched off: the discount amount was not valid' }));
+  if (ended || usedUp || !x.active) return rpc('a3_promo_upgrade', { p_id: x.id, p: { ...base, active: false, ended_reason: ended ? 'expired' : usedUp ? 'used up' : 'manual' } })
+    .then(r => ({ ...r, result: ended ? 'already expired: kept for the records, switched off' : usedUp ? 'already used up: switched off' : 'was off: tidied, left off' }));
+  const coupon = await call('POST', 'coupons', { name: code, duration: base.duration === 'repeating' ? 'repeating' : base.duration === 'forever' ? 'forever' : 'once',
+    ...(base.duration === 'repeating' ? { duration_in_months: x.duration_months || 3 } : {}),
+    ...(type === 'percentage' ? { percent_off: value } : { amount_off: Math.round(value * 100), currency: A3.C.currency }), metadata: { a3: '1', a3_old: String(x.id) } });
+  let promo;
+  try {
+    promo = await call('POST', 'promotion_codes', { coupon: coupon.id, code, ...(x.limit ? { max_redemptions: Math.max(1, x.limit - (x.used || 0)) } : {}),
+      ...(x.ends ? { expires_at: Math.floor(new Date(x.ends).getTime() / 1000) } : {}), metadata: { a3: '1' } });
+  } catch (e) {
+    if (!/already exists/i.test(e.message)) throw e;
+    promo = (await call('GET', `promotion_codes?${qs({ code, active: 'true', limit: 1 })}`)).data?.[0];
+    if (!promo) throw e;
+  }
+  const r = await rpc('a3_promo_upgrade', { p_id: x.id, p: { ...base, description: x.description || discountLabel({ type, value, duration: base.duration, duration_months: x.duration_months }),
+    stripe_coupon_id: coupon.id, stripe_promo_id: promo.id, active: true } });
+  return { ...r, result: code !== x.code ? `works now (renamed from "${x.code}")` : 'works now' };
+}
+
+// ---------- a batch of codes from the generator: one coupon, one promotion code each
+export async function makeCodes({ call, rpc, b, by }) {
+  const prefix = tidyCode(b.prefix || b.code).replace(/-+$/, '');
+  const count = Math.max(1, Math.min(50, Math.round(Number(b.count) || 1)));
+  if (prefix.length < 3 || prefix.length > (count > 1 ? 24 : 30)) throw new Oops(count > 1 ? 'The start of the code should be 3 to 24 letters or numbers.' : 'Codes are 3 to 30 letters, numbers, - or _.');
+  const type = b.type === 'fixed' ? 'fixed' : 'percentage', value = Number(b.value);
+  if (type === 'percentage' && !(value > 0 && value <= 100)) throw new Oops('Pick a percent between 1 and 100.');
+  if (type === 'fixed' && !(value > 0 && value <= 10000)) throw new Oops('Pick an amount off between $1 and $10,000.');
+  const duration = ['once', 'forever', 'repeating'].includes(b.duration) ? b.duration : 'once';
+  const months = duration === 'repeating' ? Math.max(1, Math.min(36, Math.round(Number(b.duration_months) || 3))) : null;
+  const plans = (b.plans || []).filter(p => A3.PLANS.includes(p)), tiers = (b.tiers || []).filter(t => A3.TIERS.includes(t));
+  const iso = v => { if (!v) return null; const d = new Date(v); if (isNaN(d)) throw new Oops("That date doesn't look right."); return d.toISOString(); };
+  const starts = iso(b.starts), ends = iso(b.ends);
+  if (ends && new Date(ends) <= new Date()) throw new Oops('The end date has to be in the future.');
+  const each = count > 1 ? Math.max(1, Math.round(Number(b.limit_each) || 1)) : (b.limit ? Math.max(1, Math.round(Number(b.limit))) : null);
+  const existing = new Set((await rpc('a3_promos')).map(x => x.code));
+  const codes = [];
+  if (count === 1) { if (existing.has(prefix)) throw new Oops('That code already exists.'); codes.push(prefix); }
+  else while (codes.length < count) { const c = `${prefix}-${A3.orderId(randomBytes).replace('-', '').slice(0, 4)}`; if (!existing.has(c) && !codes.includes(c)) codes.push(c); }
+  const coupon = await call('POST', 'coupons', { name: prefix.slice(0, 40), duration, ...(months ? { duration_in_months: months } : {}),
+    ...(type === 'percentage' ? { percent_off: value } : { amount_off: Math.round(value * 100), currency: A3.C.currency }), metadata: { a3: '1', a3_batch: prefix } });
+  const description = String(b.description || '').slice(0, 200) || discountLabel({ type, value, duration, duration_months: months });
+  const out = [];
+  for (const code of codes) {
+    const pc = await call('POST', 'promotion_codes', { coupon: coupon.id, code, ...(each ? { max_redemptions: each } : {}),
+      ...(ends ? { expires_at: Math.floor(new Date(ends).getTime() / 1000) } : {}), metadata: { a3: '1', a3_batch: prefix } });
+    out.push(await rpc('a3_promo_save', { p: { code, type, value, duration, duration_months: months, description, plans, tiers, min_total: Number(b.min_total) || 0,
+      starts, ends, limit: each, stripe_coupon_id: coupon.id, stripe_promo_id: pc.id, created_by: by, batch: count > 1 ? prefix : null } }));
+  }
+  return out;
+}
+
+// ---------- portal extras: the next bill, account credit, a code on an existing plan
+export async function nextBill(call, o) {
+  if (!o.subscription || !o.customer) return null;
+  const [up, cus] = await Promise.all([call('GET', `invoices/upcoming?${qs({ customer: o.customer, subscription: o.subscription })}`).catch(() => null),
+    call('GET', `customers/${encodeURIComponent(o.customer)}`).catch(() => null)]);
+  const credit = cus && cus.balance < 0 ? -cus.balance / 100 : 0;
+  if (!up) return { credit };
+  const discount = (up.total_discount_amounts || []).reduce((m, d) => m + (d.amount || 0), 0) / 100;
+  return { amount: (up.amount_due ?? up.total ?? 0) / 100, subtotal: (up.subtotal ?? 0) / 100, tax: (up.tax || 0) / 100, discount, credit,
+    credit_used: up.starting_balance < 0 ? Math.min(-up.starting_balance, up.total || 0) / 100 : 0,
+    date: up.next_payment_attempt ? new Date(up.next_payment_attempt * 1000).toISOString() : up.period_end ? new Date(up.period_end * 1000).toISOString() : null };
+}
+export async function codeOnPlan({ call, rpc, o, code, by = 'customer' }) {
+  if (!o.subscription) throw new Oops('Codes can be added to plans that renew. For a one-time order, use the code on your next order.');
+  if (!['ACTIVE', 'PAUSED'].includes(o.status)) throw new Oops(`This order is ${String(o.status).toLowerCase()}.`);
+  if (/^REF-/i.test(String(code))) throw new Oops('Referral codes are for new orders. Share yours with a friend instead!');
+  const key = Object.keys(A3.C.plans).find(k => A3.C.plans[k].name === o.plan) || 'personal';
+  const sel = A3.selection({ plan: key, tier: o.tier, billing: o.billing === 'year' ? 'year' : 'month' });
+  const x = await checkPromo({ rpc, code, sel, amount: A3.price(sel.plan, sel.tier, sel.billing).amount });
+  await call('POST', `subscriptions/${o.subscription}`, { promotion_code: x.stripe_promo_id });
+  await rpc('a3_order_patch', { p_order: o.order_id, p: { event: { kind: 'code', code: x.code, label: x.label, by } } });
+  return { code: x.code, label: x.label };
 }

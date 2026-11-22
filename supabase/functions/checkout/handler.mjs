@@ -11,9 +11,12 @@
 //   { action: 'portal_change', order, email, plan, tier, billing, apply }   → price difference, or the change itself
 //   { action: 'portal_pause' | 'portal_resume' | 'portal_cancel' | 'portal_keep' | 'portal_card', order, email, … }
 //   { action: 'gift_check', code } / { action: 'gift_claim', code, customer }
+// 2.5 — deals on the store page and at checkout; the portal also shows the next bill and credit, takes a code, edits contact details,
+// and emails a receipt:  { action: 'portal_code' | 'portal_contact' | 'portal_receipt', order, email, … }
 // Needs secrets STRIPE_SECRET_KEY and SITE_URL (https://apojidelegraphics.github.io/aArgon3).
 import { A3, cors, json, Oops, db, stripe, startCheckout, sessionStatus, checkPromo, storeInfo, newQuoteNo, taxFor, cleanGift, giftPrice, mailer,
-  subInfo, invoicesFor, planChange, pauseSub, resumeSub, cancelAtEnd, billingPortal, publicOrder, storeStatus, GIFT_MONTHS } from '../_shared/lib.mjs';
+  subInfo, invoicesFor, planChange, pauseSub, resumeSub, cancelAtEnd, billingPortal, publicOrder, storeStatus, GIFT_MONTHS,
+  liveDeals, applyDeals, publicDeal, nextBill, codeOnPlan, receiptParams } from '../_shared/lib.mjs';
 
 export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
   const rpc = db(env, fetchImpl), call = stripe(env, fetchImpl);
@@ -31,8 +34,14 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
   }
   async function portalView(o) {
     const sub = o.subscription ? await subInfo(call, o.subscription).catch(() => null) : null;
-    const [invoices, s] = await Promise.all([invoicesFor(call, o), rpc('a3_settings').catch(() => ({}))]);
-    return { order: publicOrder({ ...o, stripe_customer: !!o.customer }, sub), invoices, referral_enabled: s?.referral?.enabled !== false };
+    const [invoices, s, next] = await Promise.all([invoicesFor(call, o), rpc('a3_settings').catch(() => ({})), o.status === 'ACTIVE' ? nextBill(call, o).catch(() => null) : null]);
+    const order = publicOrder({ ...o, stripe_customer: !!o.customer }, sub);
+    order.history = (o.history || []).map(h => ({ kind: h.kind, at: h.at, from: h.from, to: h.to, months: h.months, code: h.code, due_now: h.due_now, credit: h.credit }));
+    order.deals = o.deals || [];
+    order.contact = { first: o.customer_info?.first || (o.customer_name || '').split(' ')[0] || '', last: o.customer_info?.last || (o.customer_name || '').split(' ').slice(1).join(' '),
+      phone: o.customer_phone || '', company: o.company_name || '', title: o.customer_info?.title || '', billing_email: o.customer_info?.billing_email || '' };
+    order.can.code = !!o.subscription && ['ACTIVE', 'PAUSED'].includes(o.status);
+    return { order, invoices, next, referral_enabled: s?.referral?.enabled !== false };
   }
   return async function (req) {
     const h = cors(req);
@@ -44,7 +53,8 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
         const i = await storeInfo(rpc, now()), t = i.settings?.tax;
         // tax rates (no Stripe ids) so the store can show an estimate before checkout
         const tax = t?.enabled ? { label: t.label || 'Sales tax', rates: Object.fromEntries(Object.entries(t.regions || {}).map(([r, x]) => [r, Number(x.rate) || 0])) } : null;
-        return json({ open: i.open, message: i.message, closures: i.closures || [], tax, referrals: i.settings?.referral?.enabled !== false, gifts: GIFT_MONTHS }, 200, h);
+        const deals = (await liveDeals(rpc)).map(publicDeal);
+        return json({ open: i.open, message: i.message, closures: i.closures || [], tax, referrals: i.settings?.referral?.enabled !== false, gifts: GIFT_MONTHS, deals }, 200, h);
       }
       if (b.action === 'stores') {
         const pub = await rpc('a3_stores_public');
@@ -60,7 +70,8 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
         const amount = gift ? giftPrice(sel, gift.months).amount : A3.price(sel.plan, sel.tier, sel.billing).amount;
         const promo = b.promo ? await checkPromo({ rpc, code: b.promo, sel, amount, email: customer.email }) : null;
         if (promo?.kind === 'referral' && gift) throw new Oops('Referral codes work on your own plan, not on gifts.');
-        const r = await startCheckout({ call, siteUrl: site, sel, customer, promo, gift, region, tax: taxFor(info.settings, region), followup: !!b.followup, nowSec: Math.floor(now() / 1000) });
+        const deals = gift ? null : applyDeals(await liveDeals(rpc), sel, { promo });
+        const r = await startCheckout({ call, siteUrl: site, sel, customer, promo, gift, region, deals, tax: taxFor(info.settings, region), followup: !!b.followup, nowSec: Math.floor(now() / 1000) });
         return json({ url: r.url }, 200, h);
       }
       if (b.action === 'promo') {
@@ -113,6 +124,32 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
         const o = await portalOrder(b, req);
         await cancelAtEnd({ call, rpc, o, undo: b.action === 'portal_keep' });
         return json(await portalView(await portalOrder(b, req)), 200, h);
+      }
+      if (b.action === 'portal_code') {
+        const o = await portalOrder(b, req);
+        const r = await codeOnPlan({ call, rpc, o, code: String(b.code || '') });
+        return json({ ...r, ...(await portalView(await portalOrder(b, req))) }, 200, h);
+      }
+      if (b.action === 'portal_contact') {
+        const o = await portalOrder(b, req);
+        const key = Object.keys(A3.C.plans).find(k => A3.C.plans[k].name === o.plan) || 'personal';
+        const c = b.contact || {}, clean = v => String(v ?? '').trim().slice(0, 120);
+        const p = { first: clean(c.first), last: clean(c.last), phone: clean(c.phone), title: clean(c.title) };
+        if (key !== 'personal') p.company = clean(c.company);
+        if (c.billing_email) { if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c.billing_email)) throw new Oops("That billing email doesn't look right."); p.billing_email = clean(c.billing_email).toLowerCase(); }
+        if (!p.first) throw new Oops('Add your first name.');
+        if (key !== 'personal' && !p.company) throw new Oops(`Add the ${key === 'enterprise' ? 'corporate entity' : 'business'} name.`);
+        await rpc('a3_order_contact', { p_order: o.order_id, p });
+        if (o.customer) await call('POST', `customers/${o.customer}`, { name: `${p.first} ${p.last}`.trim(), ...(p.phone ? { phone: p.phone } : {}) }).catch(() => {});
+        return json(await portalView(await portalOrder(b, req)), 200, h);
+      }
+      if (b.action === 'portal_receipt') {
+        const o = await portalOrder(b, req);
+        // 3 an hour per order is plenty
+        if (await rpc('a3_portal_attempt', { p_keys: [`receipt:${o.order_id}`], p_failed: true }) > 3) throw new Oops('We just sent it. Check your inbox (and spam folder).', 429);
+        const s = await rpc('a3_settings').catch(() => ({}));
+        await mailer(env, fetchImpl, s).receipt(receiptParams(o, { store: s?.business?.name || 'aARgon3', to: o.customer_email }));
+        return json({ sent: true, to: o.customer_email }, 200, h);
       }
       if (b.action === 'portal_card') { const o = await portalOrder(b, req); return json({ url: await billingPortal({ call, customer: o.customer, returnUrl: `${site}/account.html` }) }, 200, h); }
       // ---------- gifts

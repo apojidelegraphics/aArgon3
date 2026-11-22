@@ -32,7 +32,7 @@ The repo is public, so nothing secret lives here: the pages only hold public key
 
 ## Setup / updating
 
-1. **Database**: Supabase → aARgon3 & Mexel Backend → SQL Editor → run `supabase/aargon3-2.0.sql` (once), then `supabase/aargon3-2.1.sql`, then `supabase/aargon3-2.3.sql` (points and website custom-order requests), then `supabase/aargon3-2.4.sql` (portal, gifts, referrals, plan changes, pausing, tax, reminders, store hours).
+1. **Database**: Supabase → aARgon3 & Mexel Backend → SQL Editor → run `supabase/aargon3-2.0.sql` (once), then `supabase/aargon3-2.1.sql`, then `supabase/aargon3-2.3.sql` (points and website custom-order requests), then `supabase/aargon3-2.4.sql` (portal, gifts, referrals, plan changes, pausing, tax, reminders, store hours), then `supabase/aargon3-2.5.sql` (deals, codes that switch themselves off, old-code upgrade, code batches).
 2. **Functions**: from this folder, `npx supabase functions deploy checkout stripe-webhook staff --project-ref yuergfrpfhtcxjkcgjrx --no-verify-jwt --use-api`.
 3. **Secrets** (Supabase → Edge Functions → Secrets): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SITE_URL` = `https://apojidelegraphics.github.io/aArgon3`. Optional: `EMAILJS_PRIVATE_KEY` (only if your EmailJS account requires the private key).
 4. **Stripe webhook** → `https://yuergfrpfhtcxjkcgjrx.supabase.co/functions/v1/stripe-webhook`, Snapshot payloads, events:

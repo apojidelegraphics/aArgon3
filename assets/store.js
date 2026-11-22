@@ -11,6 +11,35 @@
   const GIFT_MONTHS = [1, 3, 6, 12];
   const giftCents = (sel, m) => m === 12 ? price(sel.plan, sel.tier, 'year').cents : price(sel.plan, sel.tier, 'month').cents * m;
   const taxRate = r => st.info?.tax?.rates?.[r] || 0;
+  // ---------- deals (2.5): automatic, no code. Same rules as the server: best price deal unless a code is used; perks always.
+  const fits = (d, sel) => (!d.plans.length || d.plans.includes(sel.plan)) && (!d.tiers.length || d.tiers.includes(sel.tier)) && (!d.billing.length || d.billing.includes(sel.billing));
+  const saving = (d, amt) => d.kind === 'percent' ? Math.round(amt * d.value) / 100 : d.kind === 'amount' ? Math.min(amt, d.value) : 0;
+  function dealsFor(sel, withCode = false) {
+    const list = (st.info?.deals || []).filter(d => fits(d, sel)), amt = price(sel.plan, sel.tier, sel.billing).amount;
+    const priceDeal = withCode ? null : list.filter(d => d.kind === 'percent' || d.kind === 'amount').sort((a, b) => saving(b, amt) - saving(a, amt))[0] || null;
+    const have = new Set(A3.items(sel.tier).map(i => i.model));
+    const perks = list.filter(d => !['percent', 'amount'].includes(d.kind));
+    return { price: priceDeal, perks, saving: priceDeal ? saving(priceDeal, amt) : 0, models: [...new Set(perks.filter(d => d.kind === 'models').flatMap(d => d.models))].filter(m => !have.has(m)),
+      chip: perks.find(d => d.kind === 'chip')?.chip || null, seats: perks.filter(d => d.kind === 'seats').reduce((m, d) => m + d.value, 0), any: !!priceDeal || perks.length > 0 };
+  }
+  const ends = d => d.ends_at ? `Ends ${new Date(d.ends_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}` : 'For a limited time';
+  function renderDeals() {
+    const el = $('deals'), list = (st.info?.deals || []).filter(d => d.featured);
+    if (!el) return;
+    el.hidden = !list.length; const dlk = document.getElementById('dealsLink'); if (dlk) dlk.hidden = !list.length;
+    el.innerHTML = list.length ? `<div class="deals-head"><span class="kicker">Deals</span><span class="muted">Applied automatically at checkout. No code needed.</span></div>
+      <div class="deals">${list.map(d => `<article class="deal ${d.kind}"><div class="dk">${d.kind === 'models' ? '2 FOR 1' : d.kind === 'percent' ? `${d.value}% OFF` : d.kind === 'amount' ? `${money(d.value)} OFF` : d.kind === 'chip' ? 'CHIP UPGRADE' : 'MORE PEOPLE'}</div>
+        <h3>${esc(d.headline)}</h3><p>${esc(d.description || d.label)}</p>
+        <div class="dfoot"><span>${esc(ends(d))}</span><button class="btn small" data-deal="${d.id}">Get this deal</button></div></article>`).join('')}</div>` : '';
+    el.querySelectorAll('[data-deal]').forEach(b => b.onclick = () => {
+      const d = list.find(x => x.id === +b.dataset.deal);
+      if (d.plans.length && !d.plans.includes(st.plan)) { st.plan = d.plans[0]; renderPlanSeg(); }
+      if (d.billing.length && !d.billing.includes(st.billing)) { st.billing = d.billing[0]; renderPlanSeg(); }
+      renderTiers();
+      const t = d.tiers.length ? d.tiers[0] : 'pro';
+      $('tiers').scrollIntoView({ behavior: 'smooth', block: 'start' }); setTimeout(() => openSetup(t), 350);
+    });
+  }
   const mailto = (subject, body = '') => `mailto:${C.contactEmail}?subject=${encodeURIComponent(subject)}${body ? '&body=' + encodeURIComponent(body) : ''}`;
 
   function toast(msg, kind = '') {
@@ -33,13 +62,15 @@
     const plan = C.plans[st.plan];
     $('planBlurb').textContent = plan.blurb;
     $('tiers').innerHTML = TIERS.map(t => {
-      const tier = C.tiers[t], p = price(st.plan, t, st.billing);
+      const tier = C.tiers[t], p = price(st.plan, t, st.billing), dl = p.quote ? null : dealsFor({ plan: st.plan, tier: t, billing: st.billing });
       const priceHtml = p.quote ? `<div class="price">Quote</div><div class="per">from ${money(p.from)}/month, by invoice</div>`
-        : `<div class="price">${money(p.amount)}<small>/${p.interval === 'year' ? 'yr' : 'mo'}</small></div>
+        : `<div class="price">${dl?.price ? `<s>${money(p.amount)}</s> ${money(Math.round((p.amount - dl.saving) * 100) / 100)}` : money(p.amount)}<small>/${p.interval === 'year' ? 'yr' : 'mo'}</small></div>
+           ${dl?.price ? `<div class="per deal-per">${esc(dl.price.label)}</div>` : ''}
            <div class="per">${p.interval === 'year' ? `${money(Math.round(p.amount / 12 * 100) / 100)}/mo, billed yearly` : `or ${money(p.monthly * C.yearlyMonths)}/yr (2 months free)`}</div>`;
-      return `<article class="tier ${tier.popular ? 'pop' : ''}">${tier.popular ? '<span class="flag">MOST POPULAR</span>' : ''}
+      return `<article class="tier ${tier.popular ? 'pop' : ''} ${dl?.any ? 'has-deal' : ''}">${dl?.any ? '<span class="flag deal-flag">DEAL</span>' : tier.popular ? '<span class="flag">MOST POPULAR</span>' : ''}
         <h3>${esc(tier.name)}</h3><div class="tag">${esc(tier.tagline)}</div>${priceHtml}
         <div class="meta"><span class="pill info">${esc(people(p.seats))}</span><span class="pill vio chip">${esc(tier.chip)}</span></div>
+        ${dl && (dl.models.length || dl.chip || dl.seats) ? `<div class="deal-perks">${dl.models.length ? `<div>🎁 <b>${dl.models.map(esc).join(' + ')}</b> free</div>` : ''}${dl.chip ? `<div>🎁 Upgraded to <b>${esc(dl.chip)}</b></div>` : ''}${dl.seats ? `<div>🎁 <b>+${dl.seats}</b> ${dl.seats === 1 ? 'person' : 'people'}</div>` : ''}</div>` : ''}
         <ul>${tier.perks.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
         ${p.quote ? `<button class="btn block" data-q="${t}">Ask for a quote</button>`
                   : `<button class="btn ${tier.popular ? 'primary' : ''} block" data-t="${t}">Choose ${esc(tier.name)}</button>`}
@@ -187,10 +218,14 @@
     // what they'll pay today: plan (or gift) − code + tax for their region
     const amt = () => {
       f1.querySelector('#amt').innerHTML = promo ? `<s class="muted" style="font-size:14px">${money(p.amount)}</s> ${money(promo.after)}<small>/${per}</small>` : `${money(p.amount)}<small>/${per}</small>`;
-      const base = isGift() ? giftCents(sel, giftM) / 100 : p.amount, after = promo && !isGift() ? promo.after : base;
+      const dl = isGift() ? null : dealsFor(sel, !!promo);
+      const base = isGift() ? giftCents(sel, giftM) / 100 : p.amount, after = promo && !isGift() ? promo.after : dl?.price ? Math.round((base - dl.saving) * 100) / 100 : base;
       const r = f2.querySelector('#region').value, rate = taxRate(r), tax = Math.round(after * rate) / 100;
       f2.querySelector('#tot').innerHTML = `<div><span>${isGift() ? `Gift · ${giftM} month${giftM === 1 ? '' : 's'}, paid once` : `${esc(C.plans[sel.plan].name)} ${esc(C.tiers[sel.tier].name)} · ${per === 'year' ? 'yearly' : 'monthly'}`}</span><b>${money(base)}</b></div>
         ${promo && !isGift() ? `<div class="off"><span>${esc(promo.code)}</span><b>−${money(Math.round((base - after) * 100) / 100)}</b></div>` : ''}
+        ${dl?.price ? `<div class="off"><span>Deal: ${esc(dl.price.headline)}</span><b>−${money(dl.saving)}</b></div>` : ''}
+        ${dl?.perks.length ? `<div class="perk"><span>🎁 ${dl.perks.map(d => esc(d.headline)).join(' · ')}</span><b>free</b></div>` : ''}
+        ${promo && !isGift() && dealsFor(sel).price ? `<div class="fine">Your code replaces the ${esc(dealsFor(sel).price.headline)} deal (one discount per order).</div>` : ''}
         ${rate ? `<div><span>${esc(st.info.tax.label)} (${rate}%)</span><b>${money(tax)}</b></div>` : ''}
         <div class="t"><span>Today</span><b>${money(Math.round((after + tax) * 100) / 100)}</b></div>
         ${!isGift() && promo ? `<div class="fine">Then ${money(p.amount)}${rate ? ' + tax' : ''} a ${per}${promo.duration === 'forever' ? ` (${money(promo.after)} with your code)` : ''}.</div>` : ''}`;
@@ -278,6 +313,7 @@
   const nice = d => new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
   post('checkout', { action: 'info' }).then(i => {
     st.info = i;
+    if ((i.deals || []).length) { renderDeals(); renderTiers(); }
     if (!i.open) {   // closed for now (owner switch, or a closure on the calendar)
       st.closed = true; st.closedMsg = i.message || 'The store is closed for now. Please check back soon.';
       const n = document.createElement('div'); n.className = 'closed'; n.textContent = st.closedMsg; $('tiers').before(n);
