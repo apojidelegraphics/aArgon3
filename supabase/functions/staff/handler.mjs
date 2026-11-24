@@ -11,7 +11,7 @@
 //
 // Body: { action, ... } — see `actions` below. The 2.0 actions (me, clock_in, clock_out, break, shifts, edit_shift, sale,
 // sale_status, comp, orders, order, cancel, log) keep working the same way for Apoji Admin.
-import { A3, cors, json, Oops, db, stripe, startCheckout, sessionStatus, newOrderId, newQuoteNo, sendInvoice, checkPromo, discountLabel, storeInfo,
+import { A3, cors, json, Oops, db, stripe, SERVER_VERSION, editPromo, editDeal, startCheckout, sessionStatus, newOrderId, newQuoteNo, sendInvoice, checkPromo, discountLabel, storeInfo,
   taxFor, saveTax, mailer, receiptParams, subInfo, planChange, pauseSub, resumeSub, cancelAtEnd, billingPortal, publicOrder, storeStatus, cleanHours, EMAILJS_DEFAULTS,
   liveDeals, applyDeals, publicDeal, saveDeal, codesFor, upgradeOldCode, makeCodes } from '../_shared/lib.mjs';
 
@@ -120,9 +120,10 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
           company: q.customer?.company || q.customer?.name || '', enterprise: q.plan === 'enterprise', days: Math.floor((now() - new Date(q.updated_at || q.created_at).getTime()) / 864e5) }))
           .filter(a => a.days >= days).sort((a, b) => b.enterprise - a.enterprise || b.days - a.days).slice(0, 20);
       }
+      const dbVersion = await rpc('a3_version').catch(() => null);   // null before aargon3-2.5.1.sql
       const hours = pub ? { stores: pub.stores.map(x => ({ code: x.code, hours: x.hours, now: storeStatus(x, pub.closures, now()) })), closures: pub.closures } : null;
       return { user: who, state, overview, store: { open: info.open, message: info.message, closure: info.closure || null }, catalog: A3.C.version, requests, alerts,
-        alert_days: Number(info.settings?.alerts?.quote_days) || 3, hours };
+        alert_days: Number(info.settings?.alerts?.quote_days) || 3, hours, server: SERVER_VERSION, db: dbVersion };
     },
     async overview() { return rpc('a3_overview', { p_tz: TZ }); },
     async profile(who) {
@@ -480,20 +481,28 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
     async deal_save(who, b) {
       need(who, 'manager');
       if (b.id) {
-        const r = await rpc('a3_deal_save', { p: { id: Number(b.id), ...('active' in b ? { active: !!b.active } : {}), ...('featured' in b ? { featured: !!b.featured } : {}) } });
-        await log(who, 'deal_edit', { name: r.name, active: r.active, featured: r.featured }); return r;
+        const quick = Object.keys(b).every(k => ['action', 'id', 'featured', 'active'].includes(k)) && !b.active;   // featured, or switching off
+        if (quick) {
+          const r = await rpc('a3_deal_save', { p: { id: Number(b.id), ...('active' in b ? { active: !!b.active } : {}), ...('featured' in b ? { featured: !!b.featured } : {}) } });
+          await log(who, 'deal_edit', { name: r.name, active: r.active, featured: r.featured }); return r;
+        }
+        const d = (await rpc('a3_deals')).find(x => x.id === Number(b.id));
+        if (!d) throw new Oops('No deal with that id.', 404);
+        const { action, id, ...changes } = b;
+        const r = await editDeal({ call, rpc, d, b: changes, by: who.name });
+        await log(who, 'deal_edit', { name: r.name, active: r.active, changes: Object.keys(changes) }); return r;
       }
       const r = await saveDeal({ call, rpc, b, by: who.name });
       await log(who, 'deal', { name: r.name, kind: r.kind }); return r;
     },
     async promo_save(who, b) {
       need(who, 'manager');
-      if (b.id) {   // switch on/off, change end date or limit
+      if (b.id) {   // 2.5.1: switch on/off or change anything (see editPromo)
         const x = (await rpc('a3_promos')).find(p => p.id === Number(b.id));
         if (!x) throw new Oops('No promotion with that id.', 404);
-        if ('active' in b && x.stripe_promo_id) await call('POST', `promotion_codes/${x.stripe_promo_id}`, { active: b.active ? 'true' : 'false' });
-        const r = await rpc('a3_promo_save', { p: { id: Number(b.id), ...('active' in b ? { active: !!b.active } : {}), ...(b.description != null ? { description: String(b.description).slice(0, 200) } : {}) } });
-        await log(who, 'promo_edit', { code: r.code, active: r.active }); return r;
+        const { action, id, ...changes } = b;
+        const r = await editPromo({ call, rpc, x, b: changes, by: who.name });
+        await log(who, 'promo_edit', { code: r.code, was: x.code !== r.code ? x.code : undefined, active: r.active, changes: Object.keys(changes) }); return r;
       }
       const code = String(b.code || '').trim().toUpperCase();
       if (!/^[A-Z0-9_-]{3,30}$/.test(code)) throw new Oops('Codes are 3 to 30 letters, numbers, - or _.');
@@ -558,7 +567,7 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
     try {
       const b = await req.json().catch(() => ({}));
       const fn = Object.hasOwn(actions, b.action) ? actions[b.action] : null;
-      if (!fn) throw new Oops('Unknown action.');
+      if (!fn) throw new Oops(`This server doesn't know "${String(b.action || '').slice(0, 40)}" yet. It's older than the app (server ${SERVER_VERSION}): deploy the functions again.`, 400);
       const who = await whoIs(req);
       return json(await fn(who, b, req) ?? null, 200, h);
     } catch (e) {

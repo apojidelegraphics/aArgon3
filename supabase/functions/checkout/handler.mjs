@@ -165,7 +165,7 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
         const o = await rpc('a3_gift_claim', { p_code: g.code, p_customer: customer });
         return json({ order: { order_id: o.order_id, plan: o.plan, tier: o.tier, expires_at: o.expires_at, models: o.models } }, 200, h);
       }
-      throw new Oops('Unknown action.');
+      throw new Oops('Something on this page is newer than the store\'s server. Refresh the page; if it keeps happening, tell us.');
     } catch (e) {
       const status = e instanceof Oops ? e.status : 400;
       if (status >= 500) console.error('[checkout]', e);

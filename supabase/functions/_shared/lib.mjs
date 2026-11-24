@@ -36,6 +36,8 @@ export function db(env, fetchImpl = fetch) {
 
 // ---------- Stripe (REST, pinned API version so field names never change under us)
 export const STRIPE_VERSION = '2024-06-20';
+export const SERVER_VERSION = '2.5.1';   // the terminal compares this with its own version
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 export const UNSET = '\u0000unset';   // sends "field=" so Stripe clears it (e.g. pause_collection)
 function form(obj, prefix = '', out = new URLSearchParams()) {
   for (const [k, v] of Object.entries(obj)) {
@@ -49,14 +51,26 @@ function form(obj, prefix = '', out = new URLSearchParams()) {
 export const qs = obj => form(obj).toString();
 export function stripe(env, fetchImpl = fetch) {
   const key = env.STRIPE_SECRET_KEY;
+  // 2.5.1: a dropped connection, rate limit or Stripe hiccup is tried again (twice). Every POST carries one Idempotency-Key
+  // for all its tries, so a retry can never make a second coupon, charge or refund.
   return async function call(method, path, body) {
     if (!key) throw new Oops('Payments aren\'t set up yet (STRIPE_SECRET_KEY is missing).', 503);
-    const res = await fetchImpl(`https://api.stripe.com/v1/${path}`, {
-      method, headers: { Authorization: `Bearer ${key}`, 'Stripe-Version': STRIPE_VERSION, ...(body ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}) },
-      body: body ? form(body).toString() : undefined });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Oops(data?.error?.message || `Stripe error (${res.status}).`, 502);
-    return data;
+    const idem = method === 'POST' ? globalThis.crypto.randomUUID() : null;
+    for (let i = 0; ; i++) {
+      let res;
+      try {
+        res = await fetchImpl(`https://api.stripe.com/v1/${path}`, {
+          method, headers: { Authorization: `Bearer ${key}`, 'Stripe-Version': STRIPE_VERSION, ...(idem ? { 'Idempotency-Key': idem } : {}), ...(body ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}) },
+          body: body ? form(body).toString() : undefined });
+      } catch {
+        if (i < 2) { await sleep(400 * (i + 1)); continue; }
+        throw new Oops('Can\'t reach Stripe right now. Try again in a minute.', 503);
+      }
+      if ((res.status === 429 || res.status >= 500) && i < 2) { await sleep(400 * (i + 1)); continue; }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Oops(data?.error?.message || `Stripe error (${res.status}).`, 502);
+      return data;
+    }
   };
 }
 
@@ -622,7 +636,7 @@ export function applyDeals(deals, sel, { promo = null, amount = null } = {}) {
 // what the public (store page, terminal) may see about a deal
 export const publicDeal = d => ({ id: d.id, headline: d.headline, description: d.description || '', kind: d.kind, value: d.value != null ? Number(d.value) : null, duration: d.duration,
   duration_months: d.duration_months, models: d.models || [], chip: d.chip, plans: d.plans || [], tiers: d.tiers || [], billing: d.billing || [], ends_at: d.ends_at, featured: d.featured, label: dealLabel(d) });
-export async function saveDeal({ call, rpc, b, by }) {
+function dealFields(b) {
   const kind = ['percent', 'amount', 'models', 'chip', 'seats'].includes(b.kind) ? b.kind : null;
   if (!kind) throw new Oops('Pick what the deal gives.');
   const headline = String(b.headline || '').trim().slice(0, 90), name = String(b.name || headline).trim().slice(0, 90);
@@ -641,15 +655,92 @@ export async function saveDeal({ call, rpc, b, by }) {
   const when = (v, what) => { if (!v) return null; const d = new Date(v); if (isNaN(d)) throw new Oops(`That ${what} isn't a date.`); return d.toISOString(); };
   const starts = when(b.starts_at, 'start'), ends = when(b.ends_at, 'end');
   if (starts && ends && ends <= starts) throw new Oops('The deal has to end after it starts.');
-  let coupon = null;
-  if (kind === 'percent' || kind === 'amount') {
-    coupon = await call('POST', 'coupons', { name: headline.slice(0, 40), duration, ...(months ? { duration_in_months: months } : {}),
-      ...(kind === 'percent' ? { percent_off: value } : { amount_off: Math.round(value * 100), currency: A3.C.currency }), metadata: { a3_deal: '1' } });
-  }
-  return rpc('a3_deal_save', { p: { name, headline, description: String(b.description || '').slice(0, 300), kind, value: ['percent', 'amount', 'seats'].includes(kind) ? value : null,
+  return { name, headline, description: String(b.description || '').slice(0, 300), kind, value: ['percent', 'amount', 'seats'].includes(kind) ? value : null,
     duration, duration_months: months, models, chip, plans: (b.plans || []).filter(p => A3.PLANS.includes(p)), tiers: (b.tiers || []).filter(t => A3.TIERS.includes(t)),
     billing: (b.billing || []).filter(x => ['month', 'year'].includes(x)), starts_at: starts, ends_at: ends, featured: b.featured !== false,
-    limit: b.limit ? Math.max(1, Math.round(Number(b.limit))) : null, stripe_coupon_id: coupon?.id || null, by } });
+    limit: b.limit ? Math.max(1, Math.round(Number(b.limit))) : null };
+}
+const dealCoupon = (call, f) => call('POST', 'coupons', { name: f.headline.slice(0, 40), duration: f.duration, ...(f.duration_months ? { duration_in_months: f.duration_months } : {}),
+  ...(f.kind === 'percent' ? { percent_off: f.value } : { amount_off: Math.round(f.value * 100), currency: A3.C.currency }), metadata: { a3_deal: '1' } });
+export async function saveDeal({ call, rpc, b, by }) {
+  const f = dealFields(b);
+  const coupon = f.kind === 'percent' || f.kind === 'amount' ? await dealCoupon(call, f) : null;
+  return rpc('a3_deal_save', { p: { ...f, stripe_coupon_id: coupon?.id || null, by } });
+}
+// 2.5.1: change anything about a deal. A price deal whose discount changed gets a new Stripe coupon (orders already
+// placed keep the old one). Turning a deal back on needs it to be in date and under its use limit.
+export async function editDeal({ call, rpc, d, b, by, nowMs = Date.now() }) {
+  const has = k => Object.hasOwn(b, k), pick = (k, dk = k) => has(k) ? b[k] : d[dk];
+  const f = dealFields({ kind: pick('kind'), headline: pick('headline'), name: has('headline') && !has('name') && d.name === d.headline ? b.headline : pick('name'),
+    description: pick('description'), value: pick('value'), duration: pick('duration'), duration_months: pick('duration_months'), models: pick('models'), chip: pick('chip'),
+    plans: pick('plans'), tiers: pick('tiers'), billing: pick('billing'), starts_at: pick('starts_at'), ends_at: pick('ends_at'), featured: pick('featured'), limit: pick('limit', 'usage_limit') });
+  const active = has('active') ? !!b.active : !!d.active, turningOn = active && !d.active;
+  if (active && f.ends_at && new Date(f.ends_at).getTime() <= nowMs && (turningOn || has('ends_at'))) throw new Oops('Move the end date into the future to switch the deal back on.');
+  if (active && f.limit && d.used_count >= f.limit && (turningOn || has('limit'))) throw new Oops(`It's been used ${d.used_count} times. Raise the use limit above that, or clear it, to switch it back on.`);
+  const priced = f.kind === 'percent' || f.kind === 'amount';
+  const changed = f.kind !== d.kind || Number(f.value) !== Number(d.value) || f.duration !== (d.duration || 'once') || (f.duration_months || null) !== (d.duration_months || null);
+  let coupon;   // undefined = keep the one it has
+  if (priced && (changed || !d.has_coupon)) coupon = (await dealCoupon(call, f)).id;
+  if (!priced) coupon = null;
+  const r = await rpc('a3_deal_edit', { p_id: d.id, p: { ...f, active, ...(coupon !== undefined ? { stripe_coupon_id: coupon } : {}), by } });
+  return { ...r, note: priced && changed ? 'New discount from now on. Orders already placed keep what they got.' : '' };
+}
+
+// ---------- 2.5.1: edit a code. Stripe fixes a promotion code's coupon, end date and use limit when it's made, so changing
+// any of those swaps in a fresh promotion code (same code, new coupon only if the discount changed). The old one is
+// switched off first and switched back on if anything fails, so the code never ends up half-changed.
+export async function editPromo({ call, rpc, x, b, by, nowMs = Date.now() }) {
+  if (x.old) throw new Oops('Bring this old code over first (the button at the top of Promotions), then edit it.');
+  const has = k => Object.hasOwn(b, k);
+  const code = has('code') ? tidyCode(b.code) : x.code;
+  if (!/^[A-Z0-9_-]{3,30}$/.test(code)) throw new Oops('Codes are 3 to 30 letters, numbers, - or _.');
+  if (/^(REF|GIFT)-/.test(code)) throw new Oops('Codes starting with REF- or GIFT- are saved for referrals and gifts.');
+  const type = has('type') ? (b.type === 'fixed' ? 'fixed' : 'percentage') : x.type, value = has('value') ? Number(b.value) : Number(x.value);
+  if (type === 'percentage' && !(value > 0 && value <= 100)) throw new Oops('Pick a percent between 1 and 100.');
+  if (type === 'fixed' && !(value > 0 && value <= 10000)) throw new Oops('Pick an amount off between $1 and $10,000.');
+  const duration = has('duration') ? (['once', 'forever', 'repeating'].includes(b.duration) ? b.duration : 'once') : (x.duration || 'once');
+  const months = duration === 'repeating' ? Math.max(1, Math.min(36, Math.round(Number(has('duration_months') ? b.duration_months : x.duration_months) || 3))) : null;
+  const plans = has('plans') ? (b.plans || []).filter(p => A3.PLANS.includes(p)) : (x.plans || []), tiers = has('tiers') ? (b.tiers || []).filter(t => A3.TIERS.includes(t)) : (x.tiers || []);
+  const min_total = has('min_total') ? Math.max(0, Number(b.min_total) || 0) : Number(x.min_total) || 0;
+  const date = (v, what) => { if (!v) return null; const d = new Date(v); if (isNaN(d)) throw new Oops(`That ${what} isn't a date.`); return d.toISOString(); };
+  const starts = has('starts') ? date(b.starts, 'start date') : x.starts, ends = has('ends') ? date(b.ends, 'end date') : (x.ends || null);
+  if (starts && ends && new Date(ends) <= new Date(starts)) throw new Oops('The code has to end after it starts.');
+  const limit = has('limit') ? (b.limit ? Math.max(1, Math.round(Number(b.limit))) : null) : (x.limit || null);
+  const used = Number(x.used) || 0, active = has('active') ? !!b.active : !!x.active, turningOn = active && !x.active;
+  const expired = !!ends && new Date(ends).getTime() <= nowMs, usedUp = !!limit && used >= limit;
+  if (active && expired && (turningOn || has('ends'))) throw new Oops('Move the end date into the future to switch the code back on.');
+  if (active && usedUp && (turningOn || has('limit'))) throw new Oops(`It's been used ${used} times. Raise the use limit above that, or clear it, to switch it back on.`);
+  const discountChanged = type !== x.type || value !== Number(x.value) || duration !== (x.duration || 'once') || (months || null) !== (x.duration_months || null);
+  const t = v => v ? new Date(v).getTime() : null;
+  const stripeChanged = discountChanged || code !== x.code || t(ends) !== t(x.ends) || limit !== (x.limit || null) || turningOn;
+  const autoLabel = !x.description || x.description === discountLabel(x);
+  const description = has('description') && String(b.description || '').trim() ? String(b.description).trim().slice(0, 200)
+    : discountChanged && autoLabel ? discountLabel({ type, value, duration, duration_months: months }) : x.description;
+  let promoId = x.stripe_promo_id, couponId, made = null;
+  const setOld = on => x.stripe_promo_id ? call('POST', `promotion_codes/${x.stripe_promo_id}`, { active: on ? 'true' : 'false' }).catch(() => {}) : null;
+  if (!active && x.active) await setOld(false);
+  else if (active && !expired && !usedUp && stripeChanged) {
+    couponId = discountChanged ? null : (await call('GET', `promotion_codes/${x.stripe_promo_id}`).catch(() => null))?.coupon?.id;
+    if (!couponId) couponId = (await call('POST', 'coupons', { name: code, duration, ...(months ? { duration_in_months: months } : {}),
+      ...(type === 'percentage' ? { percent_off: value } : { amount_off: Math.round(value * 100), currency: A3.C.currency }), metadata: { a3: '1' } })).id;
+    await setOld(false);
+    try {
+      made = await call('POST', 'promotion_codes', { coupon: couponId, code, ...(limit ? { max_redemptions: limit - used } : {}),
+        ...(ends ? { expires_at: Math.floor(t(ends) / 1000) } : {}), metadata: { a3: '1', a3_id: String(x.id) } });
+    } catch (e) {
+      if (x.active) await setOld(true);
+      throw /already exists/i.test(e.message) ? new Oops(`Stripe already has a working code called ${code}. Pick another code.`) : e;
+    }
+    promoId = made.id;
+  }
+  try {
+    const r = await rpc('a3_promo_edit', { p_id: x.id, p: { code, type, value, duration, duration_months: months, description, plans, tiers, min_total, starts, ends, limit, active,
+      ...(couponId ? { stripe_coupon_id: couponId } : {}), ...(promoId !== x.stripe_promo_id ? { stripe_promo_id: promoId } : {}), by } });
+    return { ...r, note: discountChanged && (x.duration === 'forever' || x.duration === 'repeating') && used ? 'Customers who already used it keep their old discount.' : '' };
+  } catch (e) {   // the database said no (e.g. the code is taken): put Stripe back how it was
+    if (made) { await call('POST', `promotion_codes/${made.id}`, { active: 'false' }).catch(() => {}); if (x.active) await setOld(true); }
+    throw e;
+  }
 }
 
 // ---------- codes that fit an order (the "find a code" panel on New sale)

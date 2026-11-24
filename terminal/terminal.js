@@ -79,12 +79,16 @@
   const t12 = hm => { const [h, m] = String(hm).split(':').map(Number); return `${h % 12 || 12}${m ? ':' + String(m).padStart(2, '0') : ''} ${h < 12 ? 'AM' : 'PM'}`; };
 
   // ================================================================ the staff function
+  const APP_VERSION = '2.5.1', NEED_DB = '2.5.1';   // keep APP_VERSION = package.json (a test checks)
+  const vcmp = (a, b) => { const x = String(a || '0').split('.').map(Number), y = String(b || '0').split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); } return 0; };
+  const READS = new Set(['me', 'promos', 'deals', 'promo_list', 'orders', 'log']);   // safe to try twice
   async function api(action, body = {}) {
     const { data } = await sb.auth.getSession();
     const token = data.session?.access_token;
     if (!token) { signIn('Your sign-in expired. Sign in again.'); throw new Error('Signed out.'); }
     let res;
-    try { res = await fetch(`${CFG.functions}/staff`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: CFG.storeKey }, body: JSON.stringify({ action, ...body }) }); }
+    const send = () => fetch(`${CFG.functions}/staff`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: CFG.storeKey }, body: JSON.stringify({ action, ...body }) });
+    try { res = await send().catch(async e => { if (!READS.has(action) || navigator.onLine === false) throw e; await new Promise(r => setTimeout(r, 900)); return send(); }); }
     catch { throw new Error(navigator.onLine === false ? "You're offline. Check your internet connection." : "Can't reach aARgon3's server. If you're online, its functions may not be deployed (see the README)."); }
     const r = await res.json().catch(() => ({}));
     if (res.status === 401) { await sb.auth.signOut(); signIn(r.error); throw new Error(r.error || 'Signed out.'); }
@@ -102,7 +106,16 @@
     if (alertsBefore === undefined && S.alerts.length && can('manager')) toast(`${S.alerts.length} custom order${S.alerts.length === 1 ? ' has' : 's have'} waited more than ${S.alertDays} days.`, '', () => go('today'));
     if (reqBefore != null && S.requests > reqBefore) { toast('New custom order request from the website.', 'ok', () => { quoteFilter = 'requested'; go('quotes'); }); desk?.attention?.(); } S.store = r.store || { open: true }; S.fetchedAt = Date.now();
     if (before != null && r.overview?.today?.orders > before && !S.sale) { toast(`New order! ${r.overview.today.orders} today.`, 'ok', () => go('orders')); desk?.attention?.(); }
-    paintClock(); paintMe(); paintBadges();
+    paintClock(); paintMe(); paintBadges(); paintSys(r);
+  }
+  // the server functions or the database are older than this terminal: say so, with the fix, instead of odd errors later
+  function paintSys(r = S.sys) {
+    if (r) S.sys = r;
+    const el = $('sysbar'); if (!el || !r) return;
+    const msgs = [];
+    if (can('manager') && vcmp(r.server, APP_VERSION) < 0) msgs.push(`aARgon3's server is ${r.server ? `on ${esc(r.server)}` : 'older'}, this terminal is ${APP_VERSION}. Some buttons won't work until the functions are deployed again (README → Deploy).`);
+    else if (can('owner') && r.server && vcmp(r.db, NEED_DB) < 0) msgs.push(`The database needs an update: run <b>supabase/aargon3-${NEED_DB}.sql</b> in Supabase → SQL Editor.`);
+    el.innerHTML = msgs.map(m => `<div class="sysmsg">${ic('warning', 15)}<span>${m}</span></div>`).join('');
   }
   const shift = () => S.state?.shift || null;
   const workedNow = () => { const s = shift(); if (!s) return 0; return s.minutes + (s.on_break ? 0 : (Date.now() - S.fetchedAt) / 60e3); };
@@ -154,9 +167,10 @@
         ${visible().map((p, i) => { const g = p.group !== last ? (last = p.group, p.group ? `<div class="sect">${p.group}</div>` : '') : '';
           return `${g}<button class="nav" data-p="${p.id}" title="${esc(p.label)}">${ic(p.icon)}<span class="lbl">${esc(p.label2 && !can('manager') ? p.label2 : p.label)}</span><span class="badge" data-badge="${p.id}" hidden></span>${i < 9 ? `<kbd>${MOD}${i + 1}</kbd>` : ''}</button>`; }).join('')}
         <div class="sp"></div><div class="me" id="me"></div></aside>
-      <main class="main"><header class="top"><img class="mlogo" src="../icons/icon-192.png" alt=""><h2 id="title"></h2><span class="sp"></span><div class="clock" id="clock"></div></header><div id="page"></div></main>
+      <main class="main"><header class="top"><img class="mlogo" src="../icons/icon-192.png" alt=""><h2 id="title"></h2><span class="sp"></span><div class="clock" id="clock"></div></header><div id="sysbar"></div><div id="page"></div></main>
       <nav class="tabs">${TABS.map(id => { const p = PAGES.find(x => x.id === id); return `<button class="tab" data-p="${id}">${ic(p.icon, 20)}<span>${esc(p.short || p.label)}</span><span class="badge" data-badge="${id}" hidden></span></button>`; }).join('')}
         <button class="tab" id="more">${ic('menu', 20)}<span>More</span><span class="badge" data-badge="more" hidden></span></button></nav></div>`;
+    paintSys();
     document.querySelectorAll('.nav, .tab[data-p]').forEach(b => b.onclick = () => go(b.dataset.p));
     $('more').onclick = moreSheet;
     new MutationObserver(() => labelTables($('page'))).observe($('page'), { childList: true, subtree: true });
@@ -1030,7 +1044,7 @@
     const pg = $('pg');
     pg.innerHTML = `<div class="h-row"><div class="seg" id="ptab"><button data-v="codes" class="${promoTab === 'codes' ? 'on' : ''}">Codes</button><button data-v="deals" class="${promoTab === 'deals' ? 'on' : ''}">Deals</button></div>
         <span class="sp"></span>${promoTab === 'codes' ? `<button class="btn small" id="gen">${ic('sparkles', 15)} Code generator</button><button class="btn primary small" id="np">${ic('plus', 15)} New code</button>`
-          : `<button class="btn primary small" id="nd">${ic('plus', 15)} New deal</button>`}</div>
+          : `<button class="btn small" id="dgen">${ic('sparkles', 15)} Deal generator</button><button class="btn primary small" id="nd">${ic('plus', 15)} New deal</button>`}</div>
       <p class="muted" style="margin:0 0 12px;font-size:13.5px">${promoTab === 'codes' ? 'Codes customers type in the store, or you apply in New sale. Each one is a Stripe coupon. Codes switch themselves off when they expire or run out.'
         : 'Deals apply on their own, no code needed, and show on the home page. A price deal doesn\'t stack with a code (the customer gets one discount); bonus models, chip upgrades and extra people always apply.'}</p>
       <div id="old"></div>
@@ -1042,14 +1056,16 @@
     const state = x => x.old && x.active ? '<span class="pill warn" title="Bring it over to make it work at checkout">OLD CODE</span>' : x.live ? '<span class="pill ok">LIVE</span>' : x.ended_reason === 'expired' ? '<span class="pill dim" title="Switched off automatically">EXPIRED</span>'
       : x.ended_reason === 'used up' ? '<span class="pill dim" title="Switched off automatically">USED UP</span>' : x.old ? '<span class="pill warn">OLD CODE</span>' : x.active ? '<span class="pill warn">NOT STARTED</span>' : '<span class="pill dim">OFF</span>';
     if (promoTab === 'deals') {
-      $('nd').onclick = dealSheet;
+      $('nd').onclick = () => dealSheet();
+      $('dgen').onclick = dealGeneratorSheet;
       let list; try { list = await api('deals'); } catch (e) { $('rows') && ($('rows').innerHTML = `<tr><td colspan="8" class="empty">${esc(/function|not find|2\.5/i.test(e.message) ? 'Deals need the 2.5 database update.' : e.message)}</td></tr>`); return; }
       if (!$('rows')) return;
       $('rows').innerHTML = list.map(d => `<tr><td><b>${esc(d.headline)}</b><div class="muted" style="font-size:12px">${esc([d.name !== d.headline ? d.name : '', d.created_by].filter(Boolean).join(' · '))}</div></td>
         <td>${esc(dealText(d))}</td><td class="muted">${works(d)}</td><td class="num">${d.used_count}${d.usage_limit ? ` / ${d.usage_limit}` : ''}</td><td class="muted">${d.ends_at ? fmtDate(d.ends_at) : 'Never'}</td>
         <td>${state(d)}</td><td><label class="switch" title="Show on the home page"><input type="checkbox" data-f="${d.id}" ${d.featured ? 'checked' : ''}></label></td>
-        <td class="num"><label class="switch" title="On / off"><input type="checkbox" data-id="${d.id}" ${d.active ? 'checked' : ''}></label></td></tr>`).join('') || '<tr><td colspan="8" class="empty">No deals yet. Try "2 models for the price of one" for a weekend.</td></tr>';
+        <td class="num"><span class="rowacts"><button class="cp" data-edit="${d.id}" title="Edit">${ic('edit', 14)}</button><label class="switch" title="On / off"><input type="checkbox" data-id="${d.id}" ${d.active ? 'checked' : ''}></label></span></td></tr>`).join('') || '<tr><td colspan="8" class="empty">No deals yet. Try "2 models for the price of one" for a weekend.</td></tr>';
       $('rows').querySelectorAll('input[data-id]').forEach(i => i.onchange = () => busy(null, async () => { await api('deal_save', { id: Number(i.dataset.id), active: i.checked }); toast(i.checked ? 'Deal on.' : 'Deal off.'); pagePromos(); }).catch(() => { i.checked = !i.checked; }));
+      $('rows').querySelectorAll('[data-edit]').forEach(b => b.onclick = () => dealSheet({}, list.find(d => d.id === Number(b.dataset.edit))));
       $('rows').querySelectorAll('input[data-f]').forEach(i => i.onchange = () => busy(null, async () => { await api('deal_save', { id: Number(i.dataset.f), featured: i.checked }); toast(i.checked ? 'Shown on the home page.' : 'Hidden from the home page (still applies).'); }).catch(() => { i.checked = !i.checked; }));
       return;
     }
@@ -1070,9 +1086,11 @@
         <div class="muted" style="font-size:11.5px;font-family:var(--sans)">${esc(x.created_by || (x.old ? 'old aARgon3' : ''))}${x.batch ? ` · batch ${esc(x.batch)}` : ''}</div></td><td>${esc(x.description || '')}</td>
       <td class="muted">${works(x)}${Number(x.min_total) ? ` · over ${money(x.min_total)}` : ''}</td>
       <td class="num">${x.used}${x.limit ? ` / ${x.limit}` : ''}</td><td class="muted">${x.ends ? fmtDate(x.ends) : 'Never'}</td><td>${state(x)}</td>
-      <td class="num">${x.old ? '' : `<label class="switch" title="On / off"><input type="checkbox" data-id="${x.id}" ${x.active ? 'checked' : ''}></label>`}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">No codes yet. Try the code generator.</td></tr>';
+      <td class="num">${x.old ? '' : `<span class="rowacts"><button class="cp" data-edit="${x.id}" title="Edit">${ic('edit', 14)}</button><label class="switch" title="On / off"><input type="checkbox" data-id="${x.id}" ${x.active ? 'checked' : ''}></label></span>`}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">No codes yet. Try the code generator.</td></tr>';
     $('rows').querySelectorAll('[data-copy]').forEach(b => b.onclick = e => { e.stopPropagation(); copy(b.dataset.copy, `Copied ${b.dataset.copy}`); });
+    $('rows').querySelectorAll('[data-edit]').forEach(b => b.onclick = () => promoSheet({}, list.find(x => x.id === Number(b.dataset.edit))));
     $('rows').querySelectorAll('input[data-id]').forEach(i => i.onchange = () => busy(null, async () => { await api('promo_save', { id: Number(i.dataset.id), active: i.checked }); toast(i.checked ? 'Code on.' : 'Code off.'); pagePromos(); }).catch(() => { i.checked = !i.checked; }));
+    if (list.some(x => x.edited_at)) $('rows').querySelectorAll('tr').forEach((tr, n) => { const x = list[n]; if (x?.edited_at) tr.title = `Edited ${fmtDate(x.edited_at)}${x.edited_by ? ` by ${x.edited_by}` : ''}`; });
   }
   const dealText = d => d.kind === 'percent' ? `${Number(d.value)}% off ${d.duration === 'forever' ? 'every payment' : d.duration === 'repeating' ? `for ${d.duration_months} months` : 'the first payment'}`
     : d.kind === 'amount' ? `${money(Number(d.value))} off ${d.duration === 'forever' ? 'every payment' : d.duration === 'repeating' ? `for ${d.duration_months} months` : 'the first payment'}`
@@ -1109,6 +1127,17 @@
     if (!out.length) out.push(`SAVE${num}`, `APOJI${num}`, `ARGON${yy}`);
     return [...new Set(out.map(c => c.replace(/[^A-Z0-9_-]/g, '')).filter(c => c.length >= 3 && c.length <= 24))].slice(0, 9);
   }
+  // dates for an occasion, season or month (the code and deal generators share this)
+  function periodDates({ occasion, season, month, year }) {
+    const o = OCCASIONS[occasion];
+    const d = o?.dates ? o.dates(year) : season ? seasonDates(season, year) : month !== '' ? [`${year}-${String(+month + 1).padStart(2, '0')}-01`, ymd(new Date(year, +month + 1, 0))] : null;
+    if (d && d[0] < ymd(new Date())) d[0] = ymd(new Date());
+    return d;
+  }
+  const periodName = ({ occasion, season, month }) => occasion ? OCCASIONS[occasion].label : season ? SEASONS[season][0] : month !== '' ? MONTHS[+month] : '';
+  const dayStart = d => d ? new Date(d + 'T00:00').toISOString() : null, dayEnd = d => d ? new Date(d + 'T23:59').toISOString() : null;
+  // only the fields that changed, so an edit doesn't touch Stripe unless it has to
+  const changes = (init, now) => Object.fromEntries(Object.entries(now).filter(([k, v]) => JSON.stringify(v) !== JSON.stringify(init[k])));
   function generatorSheet() {
     const now = new Date(), y0 = now.getFullYear();
     const st = { occasion: now.getMonth() === 10 ? 'blackfriday' : '', season: '', month: '', year: y0, value: 20, type: 'percentage', code: '', starts: '', ends: '', count: 1 };
@@ -1133,9 +1162,8 @@
           q('#gi').innerHTML = ideas.map(c => `<button type="button" class="idea ${c === st.code ? 'on' : ''}">${esc(c)}</button>`).join('');
           q('#gi').querySelectorAll('.idea').forEach(b => b.onclick = () => { st.code = b.textContent; q('#gcode').value = st.code; paint(); });
           if (!st.code || !ideas.includes(st.code) && !q('#gcode').matches(':focus')) { st.code = ideas[0] || ''; q('#gcode').value = st.code; q('#gi').firstElementChild?.classList.add('on'); }
-          const o = OCCASIONS[st.occasion];
-          const d = o?.dates ? o.dates(st.year) : st.season ? seasonDates(st.season, st.year) : st.month !== '' ? [`${st.year}-${String(+st.month + 1).padStart(2, '0')}-01`, ymd(new Date(st.year, +st.month + 1, 0))] : null;
-          if (d) { q('#gst').value = d[0] < ymd(new Date()) ? ymd(new Date()) : d[0]; q('#gen2').value = d[1]; }
+          const d = periodDates(st);
+          if (d) { q('#gst').value = d[0]; q('#gen2').value = d[1]; }
           q('#gcl').textContent = st.count > 1 ? 'Codes start with' : 'Code';
           q('#gnote').textContent = st.count > 1 ? `Makes ${st.count} codes like ${q('#gcode').value || 'CODE'}-7K2P, each usable once. Good for giveaways.` : 'One code anyone can use until it ends. It switches itself off after the end date.';
         };
@@ -1159,47 +1187,86 @@
       <div class="acts">${r.length > 1 ? `<button class="btn" id="all">${ic('copy', 15)} Copy all</button>` : ''}<button class="btn primary" data-close>Done</button></div>`,
       el => { el.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copy(b.dataset.copy, `Copied ${b.dataset.copy}`)); const a = el.querySelector('#all'); if (a) a.onclick = () => copy(text, `Copied ${r.length} codes`); });
   }
-  function promoSheet(pre = {}) {
-    sheet(`<div class="kicker">Promotions</div><h3>New promo code</h3>
-      <div class="grid2"><div><label class="lbl">${pre.count > 1 ? 'Codes start with' : 'Code'}</label><input class="field mono" id="code" style="text-transform:uppercase" maxlength="30" placeholder="SUMMER25" value="${esc(pre.code || '')}"></div>
-        <div><label class="lbl">Discount</label><div class="row"><input class="field" id="val" type="number" min="1" style="flex:1" value="${pre.value || 20}"><select class="field" id="type" style="width:auto"><option value="percentage">% off</option><option value="fixed" ${pre.type === 'fixed' ? 'selected' : ''}>$ off</option></select></div></div></div>
-      <div class="grid2"><div><label class="lbl">For how long</label><select class="field" id="dur"><option value="once">First payment only</option><option value="repeating">A number of months</option><option value="forever">Every payment</option></select></div>
-        <div id="monthsBox" hidden><label class="lbl">Months</label><input class="field" id="months" type="number" min="1" max="36" value="3"></div></div>
-      <label class="lbl">Plans (none ticked = all)</label><div class="chk" id="pls">${PLANS.filter(p => !C.plans[p].quote).map(p => `<label><input type="checkbox" value="${p}">${esc(C.plans[p].name)}</label>`).join('')}</div>
-      <label class="lbl">Tiers (none ticked = all)</label><div class="chk" id="trs">${TIERS.map(t => `<label><input type="checkbox" value="${t}">${esc(C.tiers[t].name)}</label>`).join('')}</div>
-      <div class="grid2"><div><label class="lbl">How many codes</label><select class="field" id="cnt"><option value="1">One shared code</option>${[5, 10, 25, 50].map(n => `<option value="${n}" ${pre.count === n ? 'selected' : ''}>${n} single-use codes</option>`).join('')}</select></div>
-        <div><label class="lbl">Use limit <span style="opacity:.6">(shared code)</span></label><input class="field" id="lim" type="number" min="1" placeholder="No limit"></div></div>
-      <div class="grid3"><div><label class="lbl">Starts</label><input class="field" id="sts" type="date" value="${esc(pre.starts || '')}"></div><div><label class="lbl">Ends</label><input class="field" id="ends" type="date" min="${ymd(new Date())}" value="${esc(pre.ends || '')}"></div><div><label class="lbl">Order over</label><div class="money-in"><input class="field" id="min" type="number" min="0" placeholder="0"></div></div></div>
-      <div class="acts"><button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="ok">${ic('promos', 15)} Create</button></div>`,
+  function promoSheet(pre = {}, x = null) {
+    const ed = !!x, auto = ed && ['expired', 'used up'].includes(x.ended_reason);
+    const v = ed ? { code: x.code, value: Number(x.value), type: x.type, duration: x.duration || 'once', months: x.duration_months || 3, plans: x.plans || [], tiers: x.tiers || [], limit: x.limit || '',
+      starts: x.starts ? ymd(x.starts) : '', ends: x.ends ? ymd(x.ends) : '', min: Number(x.min_total) || '', description: x.description || '', active: !!x.active }
+      : { code: pre.code || '', value: pre.value || 20, type: pre.type || 'percentage', duration: pre.duration || 'once', months: pre.months || 3, plans: pre.plans || [], tiers: pre.tiers || [], limit: pre.limit || '',
+      starts: pre.starts || '', ends: pre.ends || '', min: pre.min || '', description: pre.description || '', active: true };
+    sheet(`<div class="kicker">Promotions</div><h3>${ed ? `Edit <span class="mono">${esc(x.code)}</span>` : pre.copyOf ? `Copy of ${esc(pre.copyOf)}` : 'New promo code'}</h3>
+      ${ed ? `<p class="muted" style="margin:4px 0 0;font-size:13px">Used ${x.used}${x.limit ? ` of ${x.limit}` : ''} time${x.used === 1 ? '' : 's'}${x.batch ? ` · batch ${esc(x.batch)}` : ''} · made by ${esc(x.created_by || '—')}${x.edited_at ? ` · edited ${fmtDate(x.edited_at)}${x.edited_by ? ` by ${esc(x.edited_by)}` : ''}` : ''}</p>` : ''}
+      ${auto ? `<div class="banner" style="margin-top:10px">${ic('warning')}<div>Switched off automatically (${esc(x.ended_reason)}). ${x.ended_reason === 'expired' ? 'Move the end date' : 'Raise the use limit'} and turn it on to bring it back.</div></div>` : ''}
+      <div class="grid2"><div><label class="lbl">${pre.count > 1 ? 'Codes start with' : 'Code'}</label><input class="field mono" id="code" style="text-transform:uppercase" maxlength="30" placeholder="SUMMER25" value="${esc(v.code)}"></div>
+        <div><label class="lbl">Discount</label><div class="row"><input class="field" id="val" type="number" min="1" style="flex:1" value="${v.value}"><select class="field" id="type" style="width:auto"><option value="percentage">% off</option><option value="fixed" ${v.type === 'fixed' ? 'selected' : ''}>$ off</option></select></div></div></div>
+      <div class="grid2"><div><label class="lbl">For how long</label><select class="field" id="dur">${[['once', 'First payment only'], ['repeating', 'A number of months'], ['forever', 'Every payment']].map(([k, l]) => `<option value="${k}" ${v.duration === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div id="monthsBox" ${v.duration === 'repeating' ? '' : 'hidden'}><label class="lbl">Months</label><input class="field" id="months" type="number" min="1" max="36" value="${v.months}"></div></div>
+      <label class="lbl">Plans (none ticked = all)</label><div class="chk" id="pls">${PLANS.filter(p => !C.plans[p].quote).map(p => `<label><input type="checkbox" value="${p}" ${v.plans.includes(p) ? 'checked' : ''}>${esc(C.plans[p].name)}</label>`).join('')}</div>
+      <label class="lbl">Tiers (none ticked = all)</label><div class="chk" id="trs">${TIERS.map(t => `<label><input type="checkbox" value="${t}" ${v.tiers.includes(t) ? 'checked' : ''}>${esc(C.tiers[t].name)}</label>`).join('')}</div>
+      <div class="grid2">${ed ? '' : `<div><label class="lbl">How many codes</label><select class="field" id="cnt"><option value="1">One shared code</option>${[5, 10, 25, 50].map(n => `<option value="${n}" ${pre.count === n ? 'selected' : ''}>${n} single-use codes</option>`).join('')}</select></div>`}
+        <div><label class="lbl">Use limit <span style="opacity:.6">${ed ? '(total)' : '(shared code)'}</span></label><input class="field" id="lim" type="number" min="1" placeholder="No limit" value="${v.limit}"></div></div>
+      <div class="grid3"><div><label class="lbl">Starts</label><input class="field" id="sts" type="date" value="${esc(v.starts)}"></div><div><label class="lbl">Ends</label><input class="field" id="ends" type="date" value="${esc(v.ends)}"></div><div><label class="lbl">Order over</label><div class="money-in"><input class="field" id="min" type="number" min="0" placeholder="0" value="${v.min}"></div></div></div>
+      <label class="lbl">What it says <span style="opacity:.6">(optional, shown with the code)</span></label><input class="field" id="desc" maxlength="200" placeholder="Filled in from the discount" value="${esc(v.description)}">
+      ${ed ? `<label class="switch" style="margin-top:12px"><input type="checkbox" id="on" ${v.active ? 'checked' : ''}> On</label>
+        <p class="muted" style="font-size:12.5px;margin:8px 0 0">Changing the discount, end date or limit makes a fresh Stripe code behind the scenes. Customers keep typing the same code${x.used && x.duration !== 'once' ? '; people already using it keep their old discount' : ''}.</p>` : ''}
+      <div class="err" id="perr"></div>
+      <div class="acts">${ed ? `<button class="btn quiet" id="dup">${ic('copy', 15)} Duplicate</button><span class="sp"></span>` : ''}<button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="ok">${ed ? `${ic('check', 15)} Save` : `${ic('promos', 15)} Create`}</button></div>`,
       (el, close) => {
         const q = s => el.querySelector(s);
         q('#dur').onchange = () => q('#monthsBox').hidden = q('#dur').value !== 'repeating';
+        const read = () => ({ code: q('#code').value.trim().toUpperCase(), value: Number(q('#val').value), type: q('#type').value, duration: q('#dur').value, months: Number(q('#months').value) || 3,
+          plans: [...q('#pls').querySelectorAll('input:checked')].map(i => i.value), tiers: [...q('#trs').querySelectorAll('input:checked')].map(i => i.value), limit: q('#lim').value ? Number(q('#lim').value) : '',
+          starts: q('#sts').value, ends: q('#ends').value, min: Number(q('#min').value) || '', description: q('#desc').value.trim(), active: ed ? q('#on').checked : true });
+        if (ed) q('#dup').onclick = () => { const n = read(); close(); promoSheet({ ...n, code: '', copyOf: x.code, starts: '', ends: n.ends && n.ends >= ymd(new Date()) ? n.ends : '' }); };
         q('#ok').onclick = e => busy(e.target, async () => {
-          const r = await api('promo_batch', { prefix: q('#code').value, count: Number(q('#cnt').value), type: q('#type').value, value: Number(q('#val').value), duration: q('#dur').value, duration_months: Number(q('#months').value),
-            plans: [...q('#pls').querySelectorAll('input:checked')].map(i => i.value), tiers: [...q('#trs').querySelectorAll('input:checked')].map(i => i.value), limit: q('#lim').value || null,
-            starts: q('#sts').value ? new Date(q('#sts').value + 'T00:00').toISOString() : null, ends: q('#ends').value ? new Date(q('#ends').value + 'T23:59').toISOString() : null, min_total: Number(q('#min').value) || 0 });
-          close(); pagePromos(); codesMadeSheet(r);
-        }).catch(() => {});
+          q('#perr').textContent = '';
+          const n = read();
+          const api_ = o => ({ code: o.code, value: o.value, type: o.type, duration: o.duration, duration_months: o.duration === 'repeating' ? o.months : null, plans: o.plans, tiers: o.tiers,
+            limit: o.limit || null, starts: o.starts || null, ends: o.ends || null, min_total: Number(o.min) || 0, description: o.description, active: o.active });
+          try {
+            if (ed) {
+              const ch = changes(api_(v), api_(n));
+              if (!Object.keys(ch).length) { close(); return; }
+              if ('starts' in ch) ch.starts = dayStart(ch.starts); if ('ends' in ch) ch.ends = dayEnd(ch.ends);
+              const r = await api('promo_save', { id: x.id, ...ch });
+              close(); toast(`${r.code} saved.${r.note ? ` ${r.note}` : ''}`, 'ok'); pagePromos();
+            } else {
+              const r = await api('promo_batch', { prefix: n.code, count: Number(q('#cnt').value), type: n.type, value: n.value, duration: n.duration, duration_months: n.months, plans: n.plans, tiers: n.tiers,
+                limit: n.limit || null, starts: dayStart(n.starts), ends: dayEnd(n.ends), min_total: Number(n.min) || 0, description: n.description });
+              close(); pagePromos(); codesMadeSheet(r);
+            }
+          } catch (err) { q('#perr').textContent = err.message; }
+        });
       });
   }
-  function dealSheet() {
-    const KINDS = [['models', 'Bonus models', '2 for the price of 1'], ['percent', '% off', 'automatic discount'], ['amount', '$ off', 'automatic discount'], ['chip', 'Chip upgrade', 'a better Quouk chip'], ['seats', 'Extra people', 'more seats']];
-    let kind = 'models';
-    sheet(`<div class="kicker">Deals</div><h3>New deal</h3>
-      <div class="kinds" id="dk">${KINDS.map(([k, l, s]) => `<button type="button" data-k="${k}" class="${k === kind ? 'on' : ''}"><b>${l}</b><small>${s}</small></button>`).join('')}</div>
+  const DEAL_KINDS = [['models', 'Bonus models', '2 for the price of 1'], ['percent', '% off', 'automatic discount'], ['amount', '$ off', 'automatic discount'], ['chip', 'Chip upgrade', 'a better Quouk chip'], ['seats', 'Extra people', 'more seats']];
+  const bonusFamilies = () => Object.entries(C.families).filter(([k, f]) => !f.free && !TIERS.every(t => C.tiers[t].families.includes(k)));
+  function dealSheet(pre = {}, d = null) {
+    const ed = !!d;
+    const v = ed ? { kind: d.kind, value: d.value != null ? Number(d.value) : null, duration: d.duration || 'once', months: d.duration_months || 3, models: d.models || [], chip: d.chip || null,
+      plans: d.plans || [], tiers: d.tiers || [], billing: d.billing || [], headline: d.headline, description: d.description || '', starts: d.starts_at ? ymd(d.starts_at) : '', ends: d.ends_at ? ymd(d.ends_at) : '',
+      limit: d.usage_limit || '', featured: d.featured !== false, active: !!d.active }
+      : { kind: 'models', value: null, duration: 'once', months: 3, models: [], chip: null, plans: [], tiers: [], billing: [], headline: '', description: '', starts: ymd(new Date()), ends: '', limit: '', featured: true, active: true, ...pre };
+    let kind = v.kind;
+    const auto = ed && ['expired', 'used up'].includes(d.ended_reason);
+    sheet(`<div class="kicker">Deals</div><h3>${ed ? 'Edit deal' : pre.copyOf ? 'Copy of a deal' : 'New deal'}</h3>
+      ${ed ? `<p class="muted" style="margin:4px 0 0;font-size:13px">Used ${d.used_count}${d.usage_limit ? ` of ${d.usage_limit}` : ''} time${d.used_count === 1 ? '' : 's'} · made by ${esc(d.created_by || '—')}${d.edited_at ? ` · edited ${fmtDate(d.edited_at)}${d.edited_by ? ` by ${esc(d.edited_by)}` : ''}` : ''}</p>` : ''}
+      ${auto ? `<div class="banner" style="margin-top:10px">${ic('warning')}<div>Switched off automatically (${esc(d.ended_reason)}). ${d.ended_reason === 'expired' ? 'Move the end date' : 'Raise the use limit'} and turn it on to bring it back.</div></div>` : ''}
+      <div class="kinds" id="dk">${DEAL_KINDS.map(([k, l, sub]) => `<button type="button" data-k="${k}" class="${k === kind ? 'on' : ''}"><b>${l}</b><small>${sub}</small></button>`).join('')}</div>
       <div id="dbody"></div>
-      <label class="lbl">Works on</label><div class="chk" id="dpl">${PLANS.filter(p => !C.plans[p].quote).map(p => `<label><input type="checkbox" value="${p}">${esc(C.plans[p].name)}</label>`).join('')}</div>
-      <div class="chk" id="dtr" style="margin-top:6px">${TIERS.map(t => `<label><input type="checkbox" value="${t}">${esc(C.tiers[t].name)}</label>`).join('')}</div>
-      <div class="chk" id="dbl" style="margin-top:6px"><label><input type="checkbox" value="month">Monthly</label><label><input type="checkbox" value="year">Yearly</label></div>
+      <label class="lbl">Works on</label><div class="chk" id="dpl">${PLANS.filter(p => !C.plans[p].quote).map(p => `<label><input type="checkbox" value="${p}" ${v.plans.includes(p) ? 'checked' : ''}>${esc(C.plans[p].name)}</label>`).join('')}</div>
+      <div class="chk" id="dtr" style="margin-top:6px">${TIERS.map(t => `<label><input type="checkbox" value="${t}" ${v.tiers.includes(t) ? 'checked' : ''}>${esc(C.tiers[t].name)}</label>`).join('')}</div>
+      <div class="chk" id="dbl" style="margin-top:6px">${[['month', 'Monthly'], ['year', 'Yearly']].map(([k, l]) => `<label><input type="checkbox" value="${k}" ${v.billing.includes(k) ? 'checked' : ''}>${l}</label>`).join('')}</div>
       <p class="muted" style="font-size:12px;margin:4px 0 0">None ticked in a row = all of them.</p>
-      <label class="lbl">Headline customers see</label><input class="field" id="dh" maxlength="90">
-      <label class="lbl">More detail <span style="opacity:.6">(optional)</span></label><input class="field" id="dd" maxlength="300" placeholder="e.g. This weekend only, while it lasts.">
-      <div class="grid3"><div><label class="lbl">Starts</label><input class="field" id="ds" type="date" value="${ymd(new Date())}"></div><div><label class="lbl">Ends</label><input class="field" id="de" type="date" min="${ymd(new Date())}"></div><div><label class="lbl">Use limit</label><input class="field" id="dl" type="number" min="1" placeholder="No limit"></div></div>
-      <label class="switch" style="margin-top:10px"><input type="checkbox" id="df" checked> Show it on the home page</label>
-      <div class="acts"><button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="ok">${ic('sparkles', 15)} Start the deal</button></div>`,
+      <label class="lbl">Headline customers see</label><input class="field" id="dh" maxlength="90" value="${esc(v.headline)}">
+      <label class="lbl">More detail <span style="opacity:.6">(optional)</span></label><input class="field" id="dd" maxlength="300" placeholder="e.g. This weekend only, while it lasts." value="${esc(v.description)}">
+      <div class="grid3"><div><label class="lbl">Starts</label><input class="field" id="ds" type="date" value="${esc(v.starts)}"></div><div><label class="lbl">Ends</label><input class="field" id="de" type="date" value="${esc(v.ends)}"></div><div><label class="lbl">Use limit</label><input class="field" id="dl" type="number" min="1" placeholder="No limit" value="${v.limit}"></div></div>
+      <div class="row" style="gap:18px;margin-top:12px"><label class="switch"><input type="checkbox" id="df" ${v.featured ? 'checked' : ''}> Show it on the home page</label>${ed ? `<label class="switch"><input type="checkbox" id="don" ${v.active ? 'checked' : ''}> On</label>` : ''}</div>
+      ${ed && ['percent', 'amount'].includes(d.kind) && d.used_count ? '<p class="muted" style="font-size:12.5px;margin:8px 0 0">Changing the discount applies from now on. Orders already placed keep what they got.</p>' : ''}
+      <div class="err" id="derr"></div>
+      <div class="acts">${ed ? `<button class="btn quiet" id="dup">${ic('copy', 15)} Duplicate</button><span class="sp"></span>` : ''}<button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="ok">${ed ? `${ic('check', 15)} Save` : `${ic('sparkles', 15)} Start the deal`}</button></div>`,
       (el, close) => {
         const q = s => el.querySelector(s);
-        let touched = false;
+        let touched = ed || !!v.headline;
         const ticked = id => [...q(id).querySelectorAll('input:checked')].map(i => i.value);
         const suggest = () => {
           if (touched) return;
@@ -1209,25 +1276,118 @@
             : kind === 'percent' ? `${q('#dv')?.value || 20}% off${on}` : kind === 'amount' ? `${money(Number(q('#dv')?.value || 5))} off${on}` : kind === 'chip' ? `Free upgrade to the ${q('#dc')?.value || ''} chip${on}` : `${q('#dv')?.value || 2} extra people free${on}`;
         };
         const body = () => {
-          q('#dbody').innerHTML = kind === 'models' ? `<label class="lbl">Bonus models (added free on top of the tier)</label><div class="dm" id="dm">${Object.entries(C.families).filter(([k, f]) => !f.free && !TIERS.every(t => C.tiers[t].families.includes(k))).map(([k, f]) => `<div><b>${esc(f.name)}</b>${f.models.map(m => `<label><input type="checkbox" value="${esc(m)}">${esc(m)}</label>`).join('')}</div>`).join('')}</div>`
-            : kind === 'chip' ? `<label class="lbl">They get</label><select class="field" id="dc">${C.chips.filter(c => c.id !== 'No order').map(c => `<option>${esc(c.id)}</option>`).join('')}</select>`
-            : `<div class="grid2"><div><label class="lbl">${kind === 'seats' ? 'Extra people' : kind === 'percent' ? 'Percent off' : 'Dollars off'}</label><input class="field" id="dv" type="number" min="1" value="${kind === 'seats' ? 2 : kind === 'percent' ? 20 : 5}"></div>
-              ${kind === 'seats' ? '' : `<div><label class="lbl">For how long</label><select class="field" id="ddur"><option value="once">First payment</option><option value="repeating">3 months</option><option value="forever">Every payment</option></select></div>`}</div>`;
+          const val = v.kind === kind && v.value != null ? v.value : kind === 'seats' ? 2 : kind === 'percent' ? 20 : 5;
+          q('#dbody').innerHTML = kind === 'models' ? `<label class="lbl">Bonus models (added free on top of the tier)</label><div class="dm" id="dm">${bonusFamilies().map(([, f]) => `<div><b>${esc(f.name)}</b>${f.models.map(m => `<label><input type="checkbox" value="${esc(m)}" ${v.models.includes(m) ? 'checked' : ''}>${esc(m)}</label>`).join('')}</div>`).join('')}</div>`
+            : kind === 'chip' ? `<label class="lbl">They get</label><select class="field" id="dc">${C.chips.filter(c => c.id !== 'No order').map(c => `<option ${c.id === v.chip ? 'selected' : ''}>${esc(c.id)}</option>`).join('')}</select>`
+            : `<div class="grid2"><div><label class="lbl">${kind === 'seats' ? 'Extra people' : kind === 'percent' ? 'Percent off' : 'Dollars off'}</label><input class="field" id="dv" type="number" min="1" value="${val}"></div>
+              ${kind === 'seats' ? '' : `<div><label class="lbl">For how long</label><div class="row"><select class="field" id="ddur" style="flex:1">${[['once', 'First payment'], ['repeating', 'Some months'], ['forever', 'Every payment']].map(([k, l]) => `<option value="${k}" ${v.duration === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+                <input class="field" id="dmo" type="number" min="1" max="36" value="${v.months}" style="width:76px" title="Months" ${v.duration === 'repeating' ? '' : 'hidden'}></div></div>`}</div>`;
           q('#dbody').querySelectorAll('input, select').forEach(i => i.addEventListener('input', suggest));
+          q('#ddur') && (q('#ddur').onchange = () => { q('#dmo').hidden = q('#ddur').value !== 'repeating'; });
           suggest();
         };
-        q('#dk').querySelectorAll('button').forEach(b => b.onclick = () => { kind = b.dataset.k; q('#dk').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); body(); });
+        // a new kind rewrites the headline too, unless someone already changed the wording
+        q('#dk').querySelectorAll('button').forEach(b => b.onclick = () => { kind = b.dataset.k; if (q('#dh').value === v.headline) touched = false; q('#dk').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); body(); });
         ['#dpl', '#dtr', '#dbl'].forEach(id => q(id).addEventListener('change', suggest));
         q('#dh').oninput = () => touched = true;
         body();
+        const read = () => {
+          const dur = q('#ddur')?.value || 'once', priced = kind === 'percent' || kind === 'amount';
+          return { kind, value: ['percent', 'amount', 'seats'].includes(kind) ? Number(q('#dv')?.value) || null : null, duration: priced ? dur : 'once', duration_months: priced && dur === 'repeating' ? Number(q('#dmo').value) || 3 : null,
+            models: kind === 'models' ? [...el.querySelectorAll('#dm input:checked')].map(i => i.value) : null, chip: kind === 'chip' ? q('#dc').value : null,
+            plans: ticked('#dpl'), tiers: ticked('#dtr'), billing: ticked('#dbl'), headline: q('#dh').value.trim(), description: q('#dd').value.trim(),
+            starts_at: q('#ds').value || null, ends_at: q('#de').value || null, limit: q('#dl').value ? Number(q('#dl').value) : null, featured: q('#df').checked, ...(ed ? { active: q('#don').checked } : {}) };
+        };
+        if (ed) q('#dup').onclick = () => { const n = read(); close(); dealSheet({ ...n, value: n.value, months: n.duration_months || 3, starts: ymd(new Date()), ends: n.ends_at && n.ends_at >= ymd(new Date()) ? n.ends_at : '', limit: n.limit || '', copyOf: true }); };
         q('#ok').onclick = e => busy(e.target, async () => {
-          const dur = q('#ddur')?.value || 'once';
-          await api('deal_save', { kind, headline: q('#dh').value, description: q('#dd').value, value: Number(q('#dv')?.value) || null, duration: dur, duration_months: dur === 'repeating' ? 3 : null,
-            models: [...el.querySelectorAll('#dm input:checked')].map(i => i.value), chip: q('#dc')?.value, plans: ticked('#dpl'), tiers: ticked('#dtr'), billing: ticked('#dbl'),
-            starts_at: q('#ds').value ? new Date(q('#ds').value + 'T00:00').toISOString() : null, ends_at: q('#de').value ? new Date(q('#de').value + 'T23:59').toISOString() : null,
-            limit: q('#dl').value || null, featured: q('#df').checked });
-          close(); promoTab = 'deals'; toast('Deal started.', 'ok'); pagePromos();
-        }).catch(() => {});
+          q('#derr').textContent = '';
+          const n = read();
+          try {
+            if (ed) {
+              const init = { kind: v.kind, value: v.value, duration: ['percent', 'amount'].includes(v.kind) ? v.duration : 'once', duration_months: ['percent', 'amount'].includes(v.kind) && v.duration === 'repeating' ? v.months : null,
+                models: v.kind === 'models' ? v.models : null, chip: v.kind === 'chip' ? v.chip : null, plans: v.plans, tiers: v.tiers, billing: v.billing, headline: v.headline, description: v.description,
+                starts_at: v.starts || null, ends_at: v.ends || null, limit: v.limit || null, featured: v.featured, active: v.active };
+              const ch = changes(init, n);
+              if (!Object.keys(ch).length) { close(); return; }
+              if ('starts_at' in ch) ch.starts_at = dayStart(ch.starts_at); if ('ends_at' in ch) ch.ends_at = dayEnd(ch.ends_at);
+              if ('kind' in ch) Object.assign(ch, { value: n.value, duration: n.duration, duration_months: n.duration_months, models: n.models, chip: n.chip });
+              const r = await api('deal_save', { id: d.id, ...ch });
+              close(); toast(`Deal saved.${r.note ? ` ${r.note}` : ''}`, 'ok'); pagePromos();
+            } else {
+              await api('deal_save', { ...n, starts_at: dayStart(n.starts_at), ends_at: dayEnd(n.ends_at) });
+              close(); promoTab = 'deals'; toast('Deal started.', 'ok'); pagePromos();
+            }
+          } catch (err) { q('#derr').textContent = err.message; }
+        });
+      });
+  }
+
+  // ---------- 2.5.1 the deal generator: pick an occasion and a size, get a set of ready-made deals to tick
+  function dealIdeas({ occasion, season, month, size }) {
+    const name = periodName({ occasion, season, month }), pre = name ? `${name}: ` : '';
+    const pct = [10, 20, 30][size], amt = [5, 10, 20][size], people = [1, 2, 3][size];
+    const [famKey, fam] = bonusFamilies()[0] || [];
+    const without = TIERS.filter(t => famKey && !C.tiers[t].families.includes(famKey));   // tiers that don't have those models
+    const withTier = TIERS.filter(t => !without.includes(t));
+    const lowTop = without.at(-1), mid = withTier[0] || TIERS[TIERS.length - 2], top = TIERS.at(-1);
+    const topChip = C.chips.filter(c => c.id !== 'No order').at(-1)?.id;
+    const models = fam ? fam.models.slice(0, size + 1) : [];
+    const list = (a) => a.length === 1 ? a[0] : `${a.slice(0, -1).join(', ')} and ${a.at(-1)}`;
+    const bizPlan = PLANS.find(p => p === 'business');
+    return [
+      models.length && lowTop && { kind: 'models', models, tiers: [lowTop], headline: `${pre}${models.length === 1 ? `2 for 1: ${models[0]}` : list(models)} free with ${tierName(lowTop)}`, description: `Get ${list(models)} on top of everything in ${tierName(lowTop)}, at no extra cost.` },
+      { kind: 'percent', value: pct, duration: 'repeating', duration_months: 3, tiers: [mid], headline: `${pre}${tierName(mid)} is ${pct}% off for 3 months`, description: `${pct}% off your first three months of ${tierName(mid)}.` },
+      { kind: 'amount', value: amt, duration: 'once', tiers: [top], headline: `${pre}${money(amt)} off your first ${tierName(top)} payment`, description: '' },
+      topChip && mid && C.tiers[mid].chip !== topChip && { kind: 'chip', chip: topChip, tiers: [mid], headline: `${pre}Free ${topChip} chip with ${tierName(mid)}`, description: `The ${tierName(top)} chip, on the ${tierName(mid)} price.` },
+      bizPlan && { kind: 'seats', value: people, plans: [bizPlan], headline: `${pre}${people} extra ${people === 1 ? 'person' : 'people'} free on ${C.plans[bizPlan].name}`, description: '' },
+      { kind: 'percent', value: pct, duration: 'once', billing: ['year'], headline: `${pre}${pct}% off yearly plans`, description: `Pay for the year and save ${pct}% on top of the yearly price.` },
+    ].filter(Boolean);
+  }
+  function dealGeneratorSheet() {
+    const now = new Date(), y0 = now.getFullYear();
+    const st = { occasion: now.getMonth() === 10 ? 'blackfriday' : '', season: '', month: '', year: y0, size: 1 };
+    let ideas = [], pick = new Set([0, 1]);
+    sheet(`<div class="kicker">Deals</div><h3>Deal generator</h3>
+      <p class="muted" style="margin:4px 0 0;font-size:13.5px">Pick an occasion and how big. Tick the deals you want; you can change the wording first.</p>
+      <div class="grid2" style="margin-top:6px"><div><label class="lbl">Occasion</label><select class="field" id="go">${Object.entries(OCCASIONS).map(([k, o]) => `<option value="${k}" ${k === st.occasion ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select></div>
+        <div><label class="lbl">Season</label><select class="field" id="gs">${Object.entries(SEASONS).map(([k, x]) => `<option value="${k}">${esc(x[0] || 'None')}</option>`).join('')}</select></div>
+        <div><label class="lbl">Month</label><select class="field" id="gm"><option value="">None</option>${MONTHS.map((m, i) => `<option value="${i}">${m}</option>`).join('')}</select></div>
+        <div><label class="lbl">Year</label><input class="field" id="gy" type="number" min="${y0}" max="${y0 + 3}" value="${y0}"></div></div>
+      <label class="lbl">How big</label><div class="seg" id="gz"><button data-v="0">Small</button><button data-v="1" class="on">Medium</button><button data-v="2">Big</button></div>
+      <label class="lbl">Ideas</label><div class="dideas" id="gi"></div>
+      <div class="grid2"><div><label class="lbl">Starts</label><input class="field" id="gst" type="date"></div><div><label class="lbl">Ends</label><input class="field" id="gen2" type="date"></div></div>
+      <label class="switch" style="margin-top:10px"><input type="checkbox" id="gf" checked> Show them on the home page</label>
+      <div class="err" id="gerr"></div>
+      <div class="acts"><button class="btn quiet" data-close>Cancel</button><button class="btn primary" id="ok">${ic('sparkles', 15)} Start 2 deals</button></div>`,
+      (el, close) => {
+        const q = x => el.querySelector(x);
+        const count = () => { q('#ok').innerHTML = `${ic('sparkles', 15)} Start ${pick.size} deal${pick.size === 1 ? '' : 's'}`; q('#ok').disabled = !pick.size; };
+        const paint = () => {
+          Object.assign(st, { occasion: q('#go').value, season: q('#gs').value, month: q('#gm').value, year: Number(q('#gy').value) || y0 });
+          ideas = dealIdeas(st);
+          q('#gi').innerHTML = ideas.map((x, i) => `<label class="didea ${pick.has(i) ? 'on' : ''}"><input type="checkbox" data-i="${i}" ${pick.has(i) ? 'checked' : ''}>
+            <div><input class="field" data-h="${i}" value="${esc(x.headline)}" maxlength="90"><small>${esc(dealText(x))} · ${esc([(x.plans || []).map(p => C.plans[p].name).join(', ') || 'all plans', (x.tiers || []).map(tierName).join(', ') || 'all tiers', ...(x.billing?.length ? ['yearly'] : [])].join(' · '))}</small></div></label>`).join('');
+          q('#gi').querySelectorAll('input[data-i]').forEach(c => c.onchange = () => { const i = +c.dataset.i; c.checked ? pick.add(i) : pick.delete(i); c.closest('.didea').classList.toggle('on', c.checked); count(); });
+          q('#gi').querySelectorAll('input[data-h]').forEach(h => h.oninput = () => { ideas[+h.dataset.h].headline = h.value; });
+          const d = periodDates(st);
+          if (d) { q('#gst').value = d[0]; q('#gen2').value = d[1]; }
+          count();
+        };
+        ['#go', '#gs', '#gm', '#gy'].forEach(x => q(x).onchange = paint);
+        q('#gz').querySelectorAll('button').forEach(b => b.onclick = () => { st.size = +b.dataset.v; q('#gz').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); paint(); });
+        paint();
+        q('#ok').onclick = e => busy(e.target, async () => {
+          q('#gerr').textContent = '';
+          let made = 0;
+          try {
+            for (const i of [...pick].sort()) {
+              await api('deal_save', { ...ideas[i], starts_at: dayStart(q('#gst').value), ends_at: dayEnd(q('#gen2').value), featured: q('#gf').checked });
+              made++; pick.delete(i);   // so trying again doesn't make it twice
+              el.querySelector(`input[data-i="${i}"]`)?.closest('.didea')?.classList.add('done');
+            }
+            close(); promoTab = 'deals'; toast(`${made} deal${made === 1 ? '' : 's'} started.`, 'ok'); pagePromos();
+          } catch (err) { q('#gerr').textContent = `${made ? `${made} made, then: ` : ''}${err.message}`; count(); if (made) pagePromos(); }
+        });
       });
   }
 

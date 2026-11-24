@@ -61,6 +61,8 @@ export function world({ legacy = false } = {}) {
       const p = u.pathname.replace('/v1/', '');
       assert.strictEqual(init.headers['Stripe-Version'], '2024-06-20');
       const { f, meta } = form(init.body);
+      if (w.flaky > 0) { w.flaky--; if (w.flaky === 99) throw new TypeError('fetch failed'); return res({ error: { message: 'Stripe had a hiccup.' } }, 500); }
+      if (method === 'POST' && init.headers['Idempotency-Key']) { const k = init.headers['Idempotency-Key']; (w.idem = w.idem || {})[k] = (w.idem[k] || 0) + 1; }
       if (p === 'checkout/sessions' && method === 'POST') {
         const id = 'cs_test_' + crypto.randomBytes(4).toString('hex'), once = f.get('mode') === 'payment';
         const unit = +f.get('line_items[0][price_data][unit_amount]'), txr = w.taxRates[f.get('line_items[0][tax_rates][0]')];
@@ -104,14 +106,23 @@ export function world({ legacy = false } = {}) {
       if (p === 'refunds') return res({ id: 're_1', amount: 2500 });
       if (p === 'coupons') { const id = 'co_' + f.get('name').replace(/\W+/g, '_') + (f.get('metadata[a3_ref]') ? '_' + crypto.randomBytes(2).toString('hex') : ''); (w.coupons = w.coupons || {})[id] = +f.get('amount_off') || 0; return res({ id, percent_off: f.get('percent_off'), amount_off: f.get('amount_off') }); }
       if (p === 'promotion_codes' && method === 'POST') {
+        if (w.failPromo) return res({ error: { message: 'Stripe said no.' } }, 400);
         if (w.promoCodesStripe.includes(f.get('code'))) return res({ error: { message: `An active promotion code with \`code: ${f.get('code')}\` already exists.` } }, 400);
         w.promoCodesStripe.push(f.get('code'));
-        return res({ id: 'promo_' + f.get('code'), code: f.get('code'), coupon: f.get('coupon'), max_redemptions: f.get('max_redemptions'), expires_at: f.get('expires_at') });
+        let pid = 'promo_' + f.get('code'); if (w.promoInfo?.[pid]) pid += '_' + (w.promoSeq = (w.promoSeq || 1) + 1);
+        (w.promoInfo = w.promoInfo || {})[pid] = { code: f.get('code'), coupon: f.get('coupon'), max: f.get('max_redemptions'), expires: f.get('expires_at') };
+        return res({ id: pid, code: f.get('code'), coupon: f.get('coupon'), max_redemptions: f.get('max_redemptions'), expires_at: f.get('expires_at') });
       }
       if (p === 'promotion_codes' && method === 'GET') return res({ data: w.promoCodesStripe.includes(u.searchParams.get('code')) ? [{ id: 'promo_' + u.searchParams.get('code'), code: u.searchParams.get('code') }] : [] });
       if (/^customers\/[^/]+$/.test(p) && method === 'GET') return res({ id: p.split('/')[1], balance: w.customers[p.split('/')[1]]?.balance || 0 });
       if (/^customers\/[^/]+$/.test(p) && method === 'POST') { (w.customers[p.split('/')[1]] = w.customers[p.split('/')[1]] || {}).name = f.get('name'); return res({ id: p.split('/')[1] }); }
-      if (p.startsWith('promotion_codes/')) return res({ id: p.split('/')[1], active: f.get('active') === 'true' });
+      if (p.startsWith('promotion_codes/')) {
+        const id = p.split('/')[1], info = w.promoInfo?.[id], code = info?.code || id.replace(/^promo_/, '');
+        if (method === 'GET') return res({ id, code, coupon: { id: info?.coupon || 'co_' + code } });
+        if (f.get('active') === 'false') w.promoCodesStripe = w.promoCodesStripe.filter(c => c !== code);
+        if (f.get('active') === 'true' && !w.promoCodesStripe.includes(code)) w.promoCodesStripe.push(code);
+        return res({ id, active: f.get('active') === 'true' });
+      }
       if (p === 'customers') return res({ id: 'cus_' + crypto.randomBytes(3).toString('hex'), email: f.get('email') });
       if (p === 'products') return res({ id: 'prod_1', name: f.get('name') });
       if (p === 'invoiceitems') return res({ id: 'ii_1' });
@@ -245,6 +256,18 @@ export function world({ legacy = false } = {}) {
           const x = { id: w.promos.length + 1, code: p.code, type: p.type, value: p.value, duration: p.duration, duration_months: p.duration_months, plans: p.plans, tiers: p.tiers, min_total: p.min_total,
             limit: p.limit, used: 0, active: true, live: true, stripe_promo_id: p.stripe_promo_id, description: p.description, created_by: p.created_by, batch: p.batch || null, ends: p.ends || null, old: false };
           if (w.promos.some(y => y.code === x.code)) return oops('That code already exists.'); w.promos.push(x); return res(x); }
+        case 'a3_version': return w.noVersion ? oops('Could not find the function public.a3_version') : res('2.5.1');
+        case 'a3_promo_edit': { const x = w.promos.find(y => y.id === a.p_id); if (!x) return oops('No promotion with that id.'); const p = a.p;
+          if (p.code && w.promos.some(y => y.code === p.code && y.id !== x.id)) return oops('That code already exists.');
+          for (const [k, v] of Object.entries(p)) if (!['active', 'by', 'stripe_coupon_id'].includes(k)) x[k] = v;
+          if ('stripe_coupon_id' in p) x.coupon = p.stripe_coupon_id;
+          if ('active' in p) { x.active = p.active; x.ended_reason = p.active ? null : (p.ended_reason || 'manual'); }
+          x.live = x.active && (!x.ends || new Date(x.ends) > new Date()) && (!x.limit || x.used < x.limit); x.edited_by = p.by; x.edited_at = now(); return res({ ...x }); }
+        case 'a3_deal_edit': { const d = w.deals.find(y => y.id === a.p_id); if (!d) return oops('No deal with that id.'); const p = a.p;
+          for (const [k, v] of Object.entries(p)) if (!['active', 'by', 'limit'].includes(k)) d[k] = v;
+          if ('limit' in p) d.usage_limit = p.limit;
+          if ('active' in p) { d.active = p.active; d.ended_reason = p.active ? null : 'manual'; } d.edited_by = p.by;
+          return res({ ...d, live: !!d.active && (!d.ends_at || new Date(d.ends_at) > new Date()), stripe_coupon_id: undefined, has_coupon: !!d.stripe_coupon_id }); }
         case 'a3_promo_upgrade': { const x = w.promos.find(y => y.id === a.p_id); const p = a.p;
           Object.assign(x, { code: p.code || x.code, type: p.type || x.type, value: p.value ?? x.value, plans: p.plans ?? x.plans, tiers: p.tiers ?? x.tiers, description: p.description || x.description,
             stripe_promo_id: p.stripe_promo_id || x.stripe_promo_id, migrated_at: now() });

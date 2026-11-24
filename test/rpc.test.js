@@ -8,7 +8,7 @@ const R = p => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 
 function sqlFunctions() {
   const out = {};
-  for (const f of ['supabase/aargon3-2.0.sql', 'supabase/aargon3-2.1.sql', 'supabase/aargon3-2.3.sql', 'supabase/aargon3-2.4.sql', 'supabase/aargon3-2.5.sql']) {
+  for (const f of ['supabase/aargon3-2.0.sql', 'supabase/aargon3-2.1.sql', 'supabase/aargon3-2.3.sql', 'supabase/aargon3-2.4.sql', 'supabase/aargon3-2.5.sql', 'supabase/aargon3-2.5.1.sql']) {
     for (const m of R(f).matchAll(/create or replace function public\.(a3_\w+)\(([^)]*)\)/g)) {
       const args = m[2].split(',').map(a => a.trim()).filter(Boolean).map(a => ({ name: a.split(/\s+/)[0], optional: /\bdefault\b/.test(a) }));
       out[m[1]] = args;   // later files replace earlier definitions
@@ -44,7 +44,7 @@ test('every rpc() call matches a SQL function and its argument names', () => {
 });
 
 test('every a3_ function the Edge Functions call is locked to the service key', () => {
-  const grants = R('supabase/aargon3-2.0.sql') + R('supabase/aargon3-2.1.sql') + R('supabase/aargon3-2.3.sql') + R('supabase/aargon3-2.4.sql') + R('supabase/aargon3-2.5.sql');
+  const grants = R('supabase/aargon3-2.0.sql') + R('supabase/aargon3-2.1.sql') + R('supabase/aargon3-2.3.sql') + R('supabase/aargon3-2.4.sql') + R('supabase/aargon3-2.5.sql') + R('supabase/aargon3-2.5.1.sql');
   const used = new Set(['lib.mjs', 'checkout/handler.mjs', 'stripe-webhook/handler.mjs', 'staff/handler.mjs']
     .flatMap(f => rpcCalls(R('supabase/functions/' + (f.includes('/') ? f : '_shared/' + f))).map(c => c.name)));
   for (const name of used) assert.match(grants, new RegExp(`'${name}\\(`), `${name} isn't in a revoke/grant list`);
