@@ -29,7 +29,29 @@
   const hm = m => { m = Math.max(0, Math.round(m)); return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`; };
   const clockText = m => { m = Math.max(0, Math.floor(m)); return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`; };
   const initials = n => String(n || '?').trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
-  const avatar = (name, color, cls = '') => `<div class="av ${cls}" style="${color ? `background:${esc(color)}` : ''}">${esc(initials(name))}</div>`;
+  // 2.6: one Apoji account. Anyone with a Nexus account shows their Nexus picture (looked up in batches, painted in when it arrives)
+  const APOJI = { map: new Map(), want: new Set(), t: 0 };
+  const avatar = (name, color, cls = '', uid = null) => {
+    const p = uid ? APOJI.map.get(uid) : null;
+    if (uid && !APOJI.map.has(uid)) apojiWant(uid);
+    return `<div class="av ${cls} ${p?.avatar_url ? 'pic' : ''}" ${uid ? `data-uid="${esc(uid)}" data-init="${esc(initials(name))}"` : ''} style="${color ? `background:${esc(color)}` : ''}">${p?.avatar_url ? `<img src="${esc(p.avatar_url)}" alt="" loading="lazy">` : esc(initials(name))}</div>`;
+  };
+  function apojiWant(uid) { APOJI.want.add(uid); clearTimeout(APOJI.t); APOJI.t = setTimeout(apojiLoad, 40); }
+  async function apojiLoad() {
+    const ids = [...APOJI.want].slice(0, 200); APOJI.want.clear();
+    if (!ids.length) return;
+    ids.forEach(i => APOJI.map.set(i, null));
+    try {
+      const { data, error } = await sb.rpc('apoji_profiles', { p_ids: ids });
+      if (error) throw error;
+      for (const p of data || []) APOJI.map.set(p.id, p);
+    } catch { return; }   // Nexus older than 4.0.1: initials stay
+    document.querySelectorAll('.av[data-uid]').forEach(el => { const p = APOJI.map.get(el.dataset.uid); if (p?.avatar_url && !el.classList.contains('pic')) { el.classList.add('pic'); el.innerHTML = `<img src="${esc(p.avatar_url)}" alt="" loading="lazy">`; } });
+    document.dispatchEvent(new Event('apoji:profiles'));
+  }
+  // a flat apoji_profiles row → what NexusCosmetics.card() wants
+  const apojiCard = p => p && ({ ...p, style: { display_name: p.display_name, frame: p.frame, pframe: p.pframe, ptheme: p.ptheme, font: p.font, color: p.color, name_a: p.name_a, name_b: p.name_b,
+    banner: p.banner, banner_url: p.banner_url, theme_a: p.theme_a, theme_b: p.theme_b, effect: p.effect, presence: p.presence, pronouns: p.pronouns, status_text: p.status_text } });
   const localInput = d => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 16); };
   const ymd = d => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 10); };
   const statusPill = s => { s = String(s || '').toUpperCase(); return `<span class="pill ${s === 'ACTIVE' || s === 'PAID' || s === 'APPROVED' ? 'ok' : /CANCEL|REFUND|VOID|DENIED/.test(s) ? 'bad' : s === 'DRAFT' || s === 'EXPIRED' ? 'dim' : s === 'REQUESTED' ? 'info' : s === 'GIFT' ? 'vio' : 'warn'}">${esc(s || '—')}</span>`; };
@@ -79,7 +101,7 @@
   const t12 = hm => { const [h, m] = String(hm).split(':').map(Number); return `${h % 12 || 12}${m ? ':' + String(m).padStart(2, '0') : ''} ${h < 12 ? 'AM' : 'PM'}`; };
 
   // ================================================================ the staff function
-  const APP_VERSION = '2.5.1', NEED_DB = '2.5.1';   // keep APP_VERSION = package.json (a test checks)
+  const APP_VERSION = '2.6.0', NEED_DB = '2.6.0';   // keep APP_VERSION = package.json (a test checks)
   const vcmp = (a, b) => { const x = String(a || '0').split('.').map(Number), y = String(b || '0').split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); } return 0; };
   const READS = new Set(['me', 'promos', 'deals', 'promo_list', 'orders', 'log']);   // safe to try twice
   async function api(action, body = {}) {
@@ -107,6 +129,107 @@
     if (reqBefore != null && S.requests > reqBefore) { toast('New custom order request from the website.', 'ok', () => { quoteFilter = 'requested'; go('quotes'); }); desk?.attention?.(); } S.store = r.store || { open: true }; S.fetchedAt = Date.now();
     if (before != null && r.overview?.today?.orders > before && !S.sale) { toast(`New order! ${r.overview.today.orders} today.`, 'ok', () => go('orders')); desk?.attention?.(); }
     paintClock(); paintMe(); paintBadges(); paintSys(r);
+    if (Date.now() - (S.pingAt || 0) > 4 * 60e3) { S.pingAt = Date.now(); sb.rpc('presence_ping', { p_surface: 'aargon3', p_version: APP_VERSION }).then(() => {}, () => {}); }   // shows aARgon3 in your Apoji account
+    if (Date.now() - (S.statusAt || 0) > 5 * 60e3) { S.statusAt = Date.now(); loadStatus(); }
+  }
+  // ---------- ⌘K: one search across aARgon3 (orders, custom orders, codes, deals, team) and Apoji (known issues, incidents, people, agents)
+  function openSearch() {
+    const KIND = { order: ['orders', 'Order'], quote: ['quotes', 'Custom order'], promo: ['promos', 'Code'], deal: ['sparkles', 'Deal'], staff: ['team', 'Team'],
+      known_issue: ['warning', 'Known issue'], incident: ['bell', 'Incident'], person: ['profile', 'Person'], agent: ['sparkles', 'Agent'], space: ['team', 'Space'], space_message: ['mail', 'Space chat'] };
+    const ACTIONS = [['New sale', 'sale', () => go('sale')], ...(can('manager') ? [['New promo code', 'promos', () => { promoTab = 'codes'; go('promos'); promoSheet({}); }],
+      ['Code generator', 'sparkles', () => { promoTab = 'codes'; go('promos'); generatorSheet(); }], ['New deal', 'sparkles', () => { promoTab = 'deals'; go('promos'); dealSheet(); }],
+      ['Deal generator', 'sparkles', () => { promoTab = 'deals'; go('promos'); dealGeneratorSheet(); }]] : []), ['Apoji status page', 'external', () => window.open(STATUS_URL, '_blank', 'noopener')]];
+    let items = [], sel = 0, token = 0;
+    sheet(`<div class="cmdk-in">${ic('search', 18)}<input id="kq" placeholder="Search orders, codes, people, known issues…" autocomplete="off" spellcheck="false"><kbd>esc</kbd></div>
+      <div class="cmdk-list" id="kl"></div><div class="cmdk-foot">↑ ↓ move · ↵ open · aARgon3 and Apoji</div>`, (el, close) => {
+      const q = el.querySelector('#kq'), list = el.querySelector('#kl');
+      const paint = () => {
+        let last = '';
+        list.innerHTML = items.map((x, i) => `${x.group !== last ? `<div class="kg">${esc(last = x.group)}</div>` : ''}<button class="ki ${i === sel ? 'on' : ''}" data-i="${i}">${x.av || `<span class="kic">${ic(x.icon, 16)}</span>`}<span class="kt"><b>${esc(x.title)}</b>${x.sub ? `<small>${esc(x.sub)}</small>` : ''}</span>${x.tag ? `<span class="kk">${esc(x.tag)}</span>` : ''}</button>`).join('')
+          || `<div class="empty" style="padding:22px">${q.value.trim().length < 2 ? 'Type to search.' : 'Nothing found.'}</div>`;
+        list.querySelectorAll('.ki').forEach(b => { b.onclick = () => run(+b.dataset.i); b.onmousemove = () => { if (sel !== +b.dataset.i) { sel = +b.dataset.i; list.querySelectorAll('.ki').forEach(x => x.classList.toggle('on', x === b)); } }; });
+        list.querySelector('.ki.on')?.scrollIntoView({ block: 'nearest' });
+      };
+      const run = i => { const x = items[i]; if (!x) return; close(); x.run(); };
+      const local = t => {
+        const m = s => s.toLowerCase().includes(t.toLowerCase());
+        return [...visible().filter(p => !t || m(p.label) || m(p.label2 || '')).map(p => ({ group: 'Go to', icon: p.icon, title: p.label2 && !can('manager') ? p.label2 : p.label, run: () => go(p.id) })),
+          ...ACTIONS.filter(([l]) => t && m(l)).map(([l, icon, fn]) => ({ group: 'Do', icon, title: l, run: fn }))];
+      };
+      const fromA3 = r => ({ group: 'aARgon3', icon: KIND[r.kind]?.[0] || 'search', title: r.title, sub: r.sub, tag: KIND[r.kind]?.[1],
+        av: r.avatar ? `<span class="kav"><img src="${esc(r.avatar)}" alt=""></span>` : r.user_id ? avatar(r.title, null, 'sm', r.user_id) : '',
+        run: { order: () => orderSheet(r.id), quote: () => { go('quotes'); api('quote', { quote_no: r.id }).then(quoteView, e => toast(e.message, 'bad')); },
+          promo: () => { promoTab = 'codes'; go('promos'); api('promos').then(l => { const x = l.find(y => y.id === r.id); if (x) promoSheet({}, x); }); },
+          deal: () => { promoTab = 'deals'; go('promos'); api('deals').then(l => { const d = l.find(y => y.id === r.id); if (d) dealSheet({}, d); }); },
+          staff: () => r.user_id ? apojiPersonSheet(r.user_id, r.title) : go('team') }[r.kind] || (() => {}) });
+      const fromApoji = r => ({ group: 'Apoji', icon: KIND[r.kind]?.[0] || 'search', title: r.title, sub: r.sub, tag: KIND[r.kind]?.[1], av: r.kind === 'person' ? avatar(r.sub || r.title.slice(1), null, 'sm', r.id) : '',
+        run: r.kind === 'known_issue' ? () => window.open(`${STATUS_URL}#known`, '_blank', 'noopener') : r.kind === 'incident' ? () => window.open(`${STATUS_URL}#incident-${r.id}`, '_blank', 'noopener')
+          : r.kind === 'person' ? () => apojiPersonSheet(r.id, r.title) : () => toast('Open Nexus to see that.') });
+      const search = async () => {
+        const t = q.value.trim(), me = ++token;
+        items = local(t); sel = 0; paint();
+        if (t.length < 2) return;
+        const [a3, nx] = await Promise.all([api('search', { q: t }).catch(() => []), sb.rpc('apoji_search', { p_q: t, p_limit: 12 }).then(r => r.error ? [] : r.data || [], () => [])]);
+        if (me !== token || !document.body.contains(list)) return;
+        items = [...local(t), ...(a3 || []).map(fromA3), ...(nx || []).filter(r => r.kind !== 'space_message').map(fromApoji)]; sel = 0; paint();
+      };
+      let t0; q.oninput = () => { clearTimeout(t0); t0 = setTimeout(search, 160); };
+      q.onkeydown = e => {
+        if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(items.length - 1, sel + 1); paint(); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(0, sel - 1); paint(); }
+        else if (e.key === 'Enter') { e.preventDefault(); run(sel); }
+      };
+      document.addEventListener('apoji:profiles', paint, { once: true });
+      items = local(''); paint(); q.focus(); setTimeout(() => q.focus(), 30);
+    }, 'cmdk');
+  }
+  // someone's Apoji profile card (from search, or a teammate)
+  async function apojiPersonSheet(uid, name) {
+    const close = sheet(`<div class="pcard" id="pc"><div class="empty"><span class="spin"></span></div></div><div class="acts"><button class="btn primary" data-close>Close</button></div>`);
+    let p = APOJI.map.get(uid);
+    if (!p) { try { const { data } = await sb.rpc('apoji_profiles', { p_ids: [uid] }); p = data?.[0]; if (p) APOJI.map.set(uid, p); } catch {} }
+    const el = $('pc'); if (!el) return;
+    el.innerHTML = p && window.NexusCosmetics ? window.NexusCosmetics.card({ ...apojiCard(p), online: p.presence && p.presence !== 'offline', self: uid === S.me.id }, { size: 'full' })
+      : `<div class="empty">${esc(name || 'Someone')} hasn't set up a Nexus profile yet.</div>`;
+    return close;
+  }
+  // ---------- Apoji status: incidents on the aARgon3 parts of the status page, and aARgon3's known issues (with the release that fixes them)
+  const STATUS_URL = 'https://apojidelegraphics.github.io/Nexus-28/status/', A3_PARTS = ['aargon3_store', 'aargon3_terminal'];
+  const relUrl = (rel, a3 = true) => { const v = String(rel || '').match(/(\d+\.\d+(?:\.\d+)?)/)?.[1]; if (!v) return null; const mine = a3 || /aargon/i.test(rel);
+    return `https://github.com/apojidelegraphics/${mine ? 'aArgon3' : 'Nexus-28'}/releases/tag/v${v.split('.').length === 2 ? v + '.0' : v}`; };
+  async function loadStatus() {
+    const get = fn => sb.rpc(fn).then(r => r.error ? null : r.data, () => null);
+    const [st, known, links] = await Promise.all([get('public_status'), get('public_known_issues'), get('public_status_links')]);
+    if (!st && !known) return;
+    const linkOf = id => (links || []).find(l => l.incident === id);
+    S.apojiStatus = {
+      active: (st?.active || []).filter(i => (i.components || []).some(c => A3_PARTS.includes(c))).map(i => ({ ...i, link: linkOf(i.id) })),
+      parts: (st?.components || []).filter(c => A3_PARTS.includes(c.key)),
+      known: (known || []).filter(k => (k.apps || []).includes('aargon3')),
+    };
+    paintStatus();
+    if (S.page === 'today' && $('apojiStatus')) $('apojiStatus').outerHTML = statusCard();
+  }
+  function paintStatus() {
+    const el = $('statusbar'), a = S.apojiStatus; if (!el || !a) return;
+    el.innerHTML = a.active.map(i => {
+      const last = (i.updates || [])[0], k = i.link?.known || [], rel = i.link?.release;
+      return `<div class="sysmsg inc ${esc(i.severity)}">${ic('warning', 15)}<span><b>${esc(i.title)}</b> <span class="pill dim">${esc(i.status)}</span>${last?.body ? ` ${esc(last.body)}` : ''}
+        ${k.filter(x => x.workaround).map(x => `<br><small>Workaround: ${esc(x.workaround)}</small>`).join('')}${rel ? ` <small>Fix: ${relUrl(rel, false) ? `<a href="${esc(relUrl(rel, false))}" target="_blank" rel="noopener">${esc(rel)}</a>` : esc(rel)}</small>` : ''}
+        <a href="${STATUS_URL}#incident-${esc(i.id)}" target="_blank" rel="noopener">Status page</a></span></div>`;
+    }).join('');
+  }
+  function statusCard() {
+    const a = S.apojiStatus; if (!a) return '<div id="apojiStatus"></div>';
+    const open = a.known.filter(k => !['fixed', 'wont_fix'].includes(k.status)), fixed = a.known.filter(k => k.status === 'fixed');
+    const mine = v => v && vcmp(APP_VERSION, v) >= 0;
+    const row = k => `<div class="kirow"><span class="pill ${k.status === 'fixed' ? 'ok' : k.severity === 'critical' ? 'bad' : 'warn'}">${esc(k.status.replace('_', ' '))}</span><div><b>${esc(k.title)}</b>
+      ${k.workaround && k.status !== 'fixed' ? `<small>Workaround: ${esc(k.workaround)}</small>` : ''}${k.fixed_in ? `<small>Fixed in <a href="${esc(relUrl(k.fixed_in))}" target="_blank" rel="noopener">${esc(k.fixed_in)}</a>${mine(k.fixed_in) ? ' · you have it ✓' : ' · update to get it'}</small>` : ''}</div></div>`;
+    const bad = a.parts.filter(p => p.status !== 'operational');
+    return `<div class="card" id="apojiStatus"><h3>aARgon3 status<small><a href="${STATUS_URL}" target="_blank" rel="noopener">Status page</a></small></h3>
+      <div class="partline">${a.parts.map(p => `<span><i class="dot s-${esc(p.status)}"></i>${esc(p.label)}</span>`).join('') || '<span class="muted">Status page parts for aARgon3 aren\'t set up yet.</span>'}</div>
+      ${open.length ? `<div class="kilist">${open.map(row).join('')}</div>` : `<p class="muted" style="margin:8px 0 0">${bad.length ? '' : 'Everything is working. '}No known issues in aARgon3.</p>`}
+      ${fixed.length ? `<details style="margin-top:8px"><summary class="muted">${fixed.length} fixed recently</summary><div class="kilist">${fixed.map(row).join('')}</div></details>` : ''}</div>`;
   }
   // the server functions or the database are older than this terminal: say so, with the fix, instead of odd errors later
   function paintSys(r = S.sys) {
@@ -114,7 +237,7 @@
     const el = $('sysbar'); if (!el || !r) return;
     const msgs = [];
     if (can('manager') && vcmp(r.server, APP_VERSION) < 0) msgs.push(`aARgon3's server is ${r.server ? `on ${esc(r.server)}` : 'older'}, this terminal is ${APP_VERSION}. Some buttons won't work until the functions are deployed again (README → Deploy).`);
-    else if (can('owner') && r.server && vcmp(r.db, NEED_DB) < 0) msgs.push(`The database needs an update: run <b>supabase/aargon3-${NEED_DB}.sql</b> in Supabase → SQL Editor.`);
+    else if (can('owner') && r.server && vcmp(r.db, NEED_DB) < 0) msgs.push(`The database needs an update: run <b>supabase/aargon3-${NEED_DB.replace(/\.0$/, '')}.sql</b> in Supabase → SQL Editor.`);
     el.innerHTML = msgs.map(m => `<div class="sysmsg">${ic('warning', 15)}<span>${m}</span></div>`).join('');
   }
   const shift = () => S.state?.shift || null;
@@ -167,10 +290,11 @@
         ${visible().map((p, i) => { const g = p.group !== last ? (last = p.group, p.group ? `<div class="sect">${p.group}</div>` : '') : '';
           return `${g}<button class="nav" data-p="${p.id}" title="${esc(p.label)}">${ic(p.icon)}<span class="lbl">${esc(p.label2 && !can('manager') ? p.label2 : p.label)}</span><span class="badge" data-badge="${p.id}" hidden></span>${i < 9 ? `<kbd>${MOD}${i + 1}</kbd>` : ''}</button>`; }).join('')}
         <div class="sp"></div><div class="me" id="me"></div></aside>
-      <main class="main"><header class="top"><img class="mlogo" src="../icons/icon-192.png" alt=""><h2 id="title"></h2><span class="sp"></span><div class="clock" id="clock"></div></header><div id="sysbar"></div><div id="page"></div></main>
+      <main class="main"><header class="top"><img class="mlogo" src="../icons/icon-192.png" alt=""><h2 id="title"></h2><span class="sp"></span><button class="searchbtn" id="sbtn" title="Search (${/Mac/.test(navigator.platform) ? '⌘' : 'Ctrl+'}K)">${ic('search', 16)}<span>Search</span><kbd>${/Mac/.test(navigator.platform) ? '⌘K' : 'Ctrl K'}</kbd></button><div class="clock" id="clock"></div></header><div id="sysbar"></div><div id="statusbar"></div><div id="page"></div></main>
       <nav class="tabs">${TABS.map(id => { const p = PAGES.find(x => x.id === id); return `<button class="tab" data-p="${id}">${ic(p.icon, 20)}<span>${esc(p.short || p.label)}</span><span class="badge" data-badge="${id}" hidden></span></button>`; }).join('')}
         <button class="tab" id="more">${ic('menu', 20)}<span>More</span><span class="badge" data-badge="more" hidden></span></button></nav></div>`;
-    paintSys();
+    paintSys(); paintStatus();
+    $('sbtn').onclick = openSearch;
     document.querySelectorAll('.nav, .tab[data-p]').forEach(b => b.onclick = () => go(b.dataset.p));
     $('more').onclick = moreSheet;
     new MutationObserver(() => labelTables($('page'))).observe($('page'), { childList: true, subtree: true });
@@ -180,7 +304,7 @@
   const TABS = ['today', 'sale', 'orders', 'schedule'];
   function moreSheet() {
     let last = null;
-    sheet(`<div class="more-head">${avatar(S.me.name, S.me.color)}<div><b>${esc(S.me.name)}</b><small>${S.me.owner ? 'Owner' : roleName(S.me.role)} · ${esc(S.me.email || '')}</small></div></div>
+    sheet(`<div class="more-head">${avatar(S.me.name, S.me.color, '', S.me.id)}<div><b>${esc(S.me.name)}</b><small>${S.me.owner ? 'Owner' : roleName(S.me.role)} · ${esc(S.me.email || '')}</small></div></div>
       ${visible().filter(p => !TABS.includes(p.id)).map(p => { const g = p.group !== last ? (last = p.group, `${p.group ? `<div class="sect">${p.group}</div>` : ''}`) : '';
         return `${g}<button class="nav ${S.page === p.id ? 'on' : ''}" data-p="${p.id}">${ic(p.icon)}<span class="lbl">${esc(p.label2 && !can('manager') ? p.label2 : p.label)}</span><span class="badge" data-badge="${p.id}" hidden></span></button>`; }).join('')}
       <button class="nav" id="mso">${ic('power')}<span class="lbl">Sign out</span></button>`,
@@ -195,7 +319,7 @@
   }
   function paintMe() {
     if (!$('me') || !S.me) return;
-    $('me').innerHTML = `${avatar(S.me.name, S.me.color)}<div><b>${esc(S.me.name)}</b><small>${S.me.owner ? `${ic('crown', 11)} Owner` : roleName(S.me.role)}</small></div><button class="btn quiet small out" id="so" title="Sign out">${ic('power', 16)}</button>`;
+    $('me').innerHTML = `${avatar(S.me.name, S.me.color, '', S.me.id)}<div><b>${esc(S.me.name)}</b><small>${S.me.owner ? `${ic('crown', 11)} Owner` : roleName(S.me.role)}</small></div><button class="btn quiet small out" id="so" title="Sign out">${ic('power', 16)}</button>`;
     $('me').onclick = e => { if (!e.target.closest('#so')) go('profile'); };
     $('so').onclick = signOut;
   }
@@ -298,7 +422,7 @@
       </div>
       <div class="cols">
         <div class="card"><h3>Last 7 days<small>sales</small></h3><div class="bars">${week.map((d, i) => `<div class="b ${i === week.length - 1 ? 'today' : ''}" title="${esc(d.day)}: ${d.orders} orders"><span class="amt">${Number(d.revenue) ? big(d.revenue) : ''}</span><div class="bar" style="height:${Math.round((Number(d.revenue) || 0) / max * 130)}px"></div><span class="lab">${new Date(d.day + 'T12:00').toLocaleDateString([], { weekday: 'short' })}</span></div>`).join('')}</div></div>
-        <div class="card"><h3>On the clock now<small>${(o.on_clock || []).length}</small></h3><div class="people">${(o.on_clock || []).map(p => `<div class="person">${avatar(p.name)}<div><b>${esc(p.name)}</b><small>#${esc(p.store_code)} · since ${fmtTime(p.clock_in)}${p.late_minutes ? ` · ${p.late_minutes}m late` : ''}</small></div><div class="r">${p.on_break ? '<span class="pill warn">BREAK</span>' : hm(p.minutes)}</div></div>`).join('') || '<div class="empty" style="padding:20px">Nobody yet.</div>'}</div>
+        <div class="card"><h3>On the clock now<small>${(o.on_clock || []).length}</small></h3><div class="people">${(o.on_clock || []).map(p => `<div class="person">${avatar(p.name, null, '', p.user_id)}<div><b>${esc(p.name)}</b><small>#${esc(p.store_code)} · since ${fmtTime(p.clock_in)}${p.late_minutes ? ` · ${p.late_minutes}m late` : ''}</small></div><div class="r">${p.on_break ? '<span class="pill warn">BREAK</span>' : hm(p.minutes)}</div></div>`).join('') || '<div class="empty" style="padding:20px">Nobody yet.</div>'}</div>
           ${s || free() ? `<button class="btn primary block" id="newsale" style="margin-top:14px">${ic('sale', 16)} New sale</button>` : ''}</div>
       </div>
       <div class="${free() ? 'grid2' : 'grid3'}" style="margin-top:12px">
@@ -315,6 +439,7 @@
       el.innerHTML = `<h3>${ic('star')} Your points</h3><div class="ptsbig ${r.mine.total < 0 ? 'neg' : ''}">${r.mine.total}</div><div class="muted" style="font-size:13px">${r.mine.month >= 0 ? '+' : ''}${r.mine.month} this month</div>
         ${r.history[0] ? `<div class="ptlast">${ptRow(r.history[0], true)}</div>` : ''}<button class="btn small quiet" data-go="points" style="margin-top:8px">See all ${ic('right', 14)}</button>`;
       el.querySelector('[data-go]').onclick = () => go('points'); }).catch(() => { const el = $('ptsmini'); if (el) el.innerHTML = `<h3>${ic('star')} Your points</h3><p class="muted" style="margin:0">Points start after the 2.3 update.</p>`; });
+    pg.insertAdjacentHTML('beforeend', statusCard());   // 2.6: aARgon3 on the Apoji status page
     $('newsale') && ($('newsale').onclick = () => go('sale'));
     $('fix') && ($('fix').onclick = e => clockOut({ at: new Date($('leftAt').value).toISOString(), note: 'Forgot to clock out' }, e.target));
     $('openStore') && ($('openStore').onclick = e => busy(e.target, async () => { await api('settings_save', { key: 'store', value: { open: true, message: '' } }); await refresh(); go('today'); toast('The store is open.', 'ok'); }).catch(() => {}));
@@ -521,7 +646,8 @@
         ${o.gift ? `<span>Gift</span><span>${o.status === 'GIFT' ? `Not claimed yet · code <b class="mono">${esc(o.gift.code)}</b>` : `Claimed ${fmtDay(o.gift.claimed_at)}`} · ${o.gift.months} months for ${esc(o.gift.to_name || '')}${o.gift.from_name ? `, from ${esc(o.gift.from_name)}` : ''}</span>` : ''}
         ${o.referral_code ? `<span>Referral code</span><span class="mono">${esc(o.referral_code)}${o.referrals ? ` <span class="muted">· ${o.referrals} friend${o.referrals === 1 ? '' : 's'}, ${money(o.referral_credit)} credit</span>` : ''}</span>` : ''}
         ${o.referred_by ? `<span>Referred by</span><span class="mono">${esc(o.referred_by)}</span>` : ''}
-        ${o.deals?.length ? `<span>Deals</span><span>${o.deals.map(d => esc(d.headline)).join(' · ')}</span>` : ''}</div>
+        ${o.deals?.length ? `<span>Deals</span><span>${o.deals.map(d => esc(d.headline)).join(' · ')}</span>` : ''}
+        ${o.apoji?.username ? `<span>Nexus</span><span class="nxline">${o.apoji.avatar_url ? `<span class="kav"><img src="${esc(o.apoji.avatar_url)}" alt=""></span>` : ''}<b>${esc(o.apoji.display_name || o.apoji.nickname || o.apoji.username)}</b> <span class="muted mono">@${esc(o.apoji.username)}</span></span>` : ''}</div>
       ${(o.history || []).length ? `<label class="lbl">History</label><div class="hist">${o.history.slice().reverse().map(h => `<div><span class="muted">${fmtWhen(h.at)}</span> ${esc(histText(h))}</div>`).join('')}</div>` : ''}
       <label class="lbl">Models</label><div class="chips">${(o.models || []).map(m => `<span>${esc(m)}</span>`).join('') || '<span>—</span>'}</div>
       ${can('manager') && (o.can?.change || o.can?.pause || o.can?.resume || o.can?.cancel || o.can?.keep || o.can?.card) ? `<div class="oacts">
@@ -552,7 +678,7 @@
   }
 
   const histText = h => ({ change: `Changed ${h.from} → ${h.to}${h.due_now ? `, charged ${money(h.due_now)}` : h.credit ? `, ${money(h.credit)} credit` : ''}`, pause: `Paused ${h.months} month${h.months === 1 ? '' : 's'}`,
-    resume: 'Resumed', code: `Code ${h.code} added${h.label ? ` (${h.label})` : ''}`, contact: 'Contact details updated', cancel_at_end: 'Set to cancel at the end of the period', keep: 'Cancel undone', gift_bought: `Bought as a ${h.months}-month gift`, gift_claimed: `Gift claimed by ${h.by || 'them'}`, expired: 'Ended (gift months used up)' }[h.kind] || h.kind) + (h.by && !['gift_claimed'].includes(h.kind) ? ` · ${h.by}` : '');
+    resume: 'Resumed', code: `Code ${h.code} added${h.label ? ` (${h.label})` : ''}`, contact: 'Contact details updated', apoji_link: `Linked Nexus account${h.username ? ` @${h.username}` : ''}`, apoji_unlink: 'Unlinked Nexus account', cancel_at_end: 'Set to cancel at the end of the period', keep: 'Cancel undone', gift_bought: `Bought as a ${h.months}-month gift`, gift_claimed: `Gift claimed by ${h.by || 'them'}`, expired: 'Ended (gift months used up)' }[h.kind] || h.kind) + (h.by && !['gift_claimed'].includes(h.kind) ? ` · ${h.by}` : '');
   function receiptSheet(orderId, email) {
     sheet(`<div class="kicker">Receipt</div><h3>Email the receipt for ${esc(orderId)}</h3>
       <p class="muted" style="margin:4px 0 0">Sent from ${esc(S.me ? 'aARgon3' : '')} with your store's name on it.</p>
@@ -640,7 +766,7 @@
     const isOff = (uid, d) => approved.some(t => t.user_id === uid && ymd(d) >= t.starts_on && ymd(d) <= t.ends_on);
     const today = ymd(new Date());
     $('grid').innerHTML = `<div class="week"><div class="hd">Person</div>${days.map(d => `<div class="hd ${ymd(d) === today ? 'today' : ''}">${d.toLocaleDateString([], { weekday: 'short' })}<b>${d.getDate()}</b></div>`).join('')}
-      ${people.map(p => `<div class="who ${p.user_id === S.me.id ? 'me-row' : ''}">${avatar(p.name, p.color)}<div>${esc(p.name)}<small>${esc(p.title || roleName(p.role) || '')}</small></div></div>
+      ${people.map(p => `<div class="who ${p.user_id === S.me.id ? 'me-row' : ''}">${avatar(p.name, p.color, '', p.user_id)}<div>${esc(p.name)}<small>${esc(p.title || roleName(p.role) || '')}</small></div></div>
         ${days.map(d => { const list = shifts.filter(c => c.user_id === p.user_id && ymd(c.starts_at) === ymd(d)), offDay = isOff(p.user_id, d);
           return `<div class="cell ${mgr ? 'can' : ''} ${offDay ? 'off' : ''} ${p.user_id === S.me.id ? 'me-row' : ''}" data-u="${esc(p.user_id)}" data-d="${ymd(d)}">${list.map(c => `<button class="chipx ${p.user_id === S.me.id ? 'me' : ''} ${c.worked != null ? 'done' : ''} ${c.time_off ? 'flag' : ''}" data-id="${c.id}" title="${esc(`${fmtTime(c.starts_at)}–${fmtTime(c.ends_at)} · ${c.store_code ? '#' + c.store_code : 'Any store'}${c.note ? ' · ' + c.note : ''}`)}"><span class="t">${shortTime(c.starts_at)}–${shortTime(c.ends_at)}</span><small>${c.store_code ? `#${esc(c.store_code)}` : 'Any store'}${c.note ? ` · ${esc(c.note)}` : ''}${c.worked != null ? ` · worked ${hm(c.worked)}` : ''}</small></button>`).join('')}${offDay && !list.length ? '<small class="muted">Off</small>' : ''}</div>`; }).join('')}`).join('')}</div>`;
     if (!mgr) return;
@@ -816,7 +942,7 @@
         <button class="btn primary small" id="give" ${eligible.length ? '' : 'disabled'}>${ic('star', 15)} Give points</button></div>
       <div class="ptgrid">
         <div class="card"><h3>Leaderboard <small>this month · all time</small></h3><div class="board">${board.map((r, i) => `<button class="brow ${r.user_id === ptUser ? 'on' : ''}" data-u="${esc(r.user_id)}">
-            <span class="rank">${i + 1}</span>${avatar(r.name, r.color)}<span class="bn"><b>${esc(r.name)}</b><small>${esc(r.title || roleName(r.role))}</small></span>
+            <span class="rank">${i + 1}</span>${avatar(r.name, r.color, '', r.user_id)}<span class="bn"><b>${esc(r.name)}</b><small>${esc(r.title || roleName(r.role))}</small></span>
             <span class="bm">${r.month > 0 ? '+' : ''}${r.month}</span><span class="bt ${r.total < 0 ? 'neg' : ''}">${r.total}</span></button>`).join('') || '<p class="muted">Nobody on the team yet.</p>'}</div></div>
         <div class="card"><div class="h-row" style="margin:0 0 6px"><h3 style="margin:0">${who ? esc(who.name) : 'Recent'}</h3><span class="sp"></span>${who ? `<button class="btn quiet small" id="allp">Everyone</button>${eligible.some(r => r.user_id === who.user_id) ? `<button class="btn small" id="givep">${ic('star', 14)} Give ${esc(who.name.split(' ')[0])} points</button>` : ''}` : ''}</div>
           ${who ? `<div class="row" style="gap:18px;margin:4px 0 12px"><div><div class="k">TOTAL</div><b class="ptsbig ${who.total < 0 ? 'neg' : ''}">${who.total}</b></div><div><div class="k">MONTH</div><b style="font-size:20px">${who.month > 0 ? '+' : ''}${who.month}</b></div><div><div class="k">EARNED</div><b style="font-size:20px;color:var(--mint)">+${who.given}</b></div><div><div class="k">LOST</div><b style="font-size:20px;color:var(--red)">${who.taken}</b></div></div>` : ''}
@@ -858,13 +984,28 @@
       });
   }
 
+  // the Apoji account card on Profile: your Nexus look, the Apoji apps you use, where to change it
+  async function apojiAccount() {
+    const el = $('apojiAcct'); if (!el) return;
+    let a = null;
+    try { const { data, error } = await sb.rpc('apoji_account'); if (error) throw error; a = data; } catch { a = null; }
+    if (!$('apojiAcct')) return;
+    const NXC = window.NexusCosmetics, card = a?.card;
+    const SURF = { mac: 'Nexus for Mac', windows: 'Nexus for Windows', linux: 'Nexus for Linux', phone: 'N28C', test_run: 'Test Run', admin: 'Apoji Admin', aargon3: 'aARgon3' };
+    const apps = (a?.apps || []).map(x => `<span class="appchip" title="Last used ${fmtDate(x.seen_at)}">${esc(SURF[x.surface] || x.surface)}${x.version ? ` <small>${esc(x.version)}</small>` : ''}</span>`).join('');
+    el.innerHTML = `<div class="card apoji-acct"><div class="aa-card">${card && NXC ? NXC.card({ ...card, self: true }, { size: 'mini' }) : avatar(S.me.name, S.me.color, 'lg', S.me.id)}</div>
+      <div class="aa-body"><div class="kicker">Your Apoji account</div><h3>${esc(card?.style?.display_name || card?.nickname || S.me.name)}${card?.username ? ` <span class="muted mono" style="font-size:14px">@${esc(card.username)}</span>` : ''}</h3>
+        <p class="muted">The same account signs you into Nexus, N28C, Test Run${S.me.level && S.me.level !== 'staff' ? ', Apoji Admin' : ''} and aARgon3. Your picture, frame and name come from Nexus.</p>
+        ${apps ? `<div class="appchips">${apps}</div>` : ''}
+        <div class="row" style="margin-top:10px"><a class="btn small" href="https://apojidelegraphics.github.io/Nexus-28/companion/" target="_blank" rel="noopener">${ic('external', 14)} Change it in Nexus</a>${a?.cirkts?.balance != null ? `<span class="muted" style="font-size:13px">${Number(a.cirkts.balance).toLocaleString()} Cirkts</span>` : ''}</div></div></div>`;
+  }
   async function pageProfile() {
     const pg = $('pg');
     pg.innerHTML = '<div class="empty"><span class="spin"></span></div>';
     let p; try { p = await api('profile'); } catch (e) { pg.innerHTML = `<div class="empty-card">${esc(e.message)}</div>`; return; }
     if (S.page !== 'profile') return;
     const me = p.me || { name: S.me.name, email: S.me.email, role: S.me.role }, s = p.sales?.all_time || {};
-    pg.innerHTML = `<div class="card profhead">${avatar(me.name, me.color, 'lg')}<div style="flex:1;min-width:200px"><h3 style="margin:0;font-size:24px">${esc(me.name)}</h3>
+    pg.innerHTML = `<div id="apojiAcct"></div><div class="card profhead">${avatar(me.name, me.color, 'lg', me.user_id || S.me.id)}<div style="flex:1;min-width:200px"><h3 style="margin:0;font-size:24px">${esc(me.name)}</h3>
         <div class="muted">${esc(me.title || roleName(me.role))} · ${esc(me.email)}</div><div class="row" style="margin-top:8px">${S.me.owner ? `<span class="pill vio">${ic('crown', 12)} OWNER</span>` : `<span class="pill info">${esc(roleName(me.role).toUpperCase())}</span>`}<span class="pill dim">NEXUS ${esc(String(S.me.level).toUpperCase())}</span></div></div></div>
       <div class="stats" style="margin-top:12px">
         <div class="card stat"><div class="k">Your sales, all time</div><div class="v">${big(s.revenue)}</div><div class="s">${s.orders || 0} orders</div></div>
@@ -897,6 +1038,7 @@
       busy(e.submitter, async () => { const { error } = await sb.auth.updateUser({ password: $('p1').value }); if (error) throw error; $('p1').value = $('p2').value = ''; toast('Password changed.', 'ok'); }).catch(() => {}); };
     $('ask').onclick = timeOffSheet;
     pg.querySelectorAll('[data-cancel]').forEach(b => b.onclick = () => busy(b, async () => { await api('timeoff_decide', { id: Number(b.dataset.cancel), status: 'cancelled' }); pageProfile(); }).catch(() => {}));
+    apojiAccount();
   }
 
   // ================================================================ Custom orders & Enterprise quotes (managers)
@@ -1402,7 +1544,7 @@
     catch (e) { $('rows') && ($('rows').innerHTML = `<tr><td colspan="9" class="empty">${esc(e.message)}</td></tr>`); return; }
     if (!$('rows')) return;
     S.team = list;
-    $('rows').innerHTML = list.map((s, i) => `<tr class="click" data-i="${i}" style="${s.active ? '' : 'opacity:.5'}"><td><div class="row" style="gap:10px;flex-wrap:nowrap">${avatar(s.name, s.color)}<div><b>${esc(s.name)}</b><div class="muted" style="font-size:12.5px">${esc(s.title ? `${s.title} · ` : '')}${esc(s.email)}</div></div></div></td>
+    $('rows').innerHTML = list.map((s, i) => `<tr class="click" data-i="${i}" style="${s.active ? '' : 'opacity:.5'}"><td><div class="row" style="gap:10px;flex-wrap:nowrap">${avatar(s.name, s.color, '', s.user_id)}<div><b>${esc(s.name)}</b><div class="muted" style="font-size:12.5px">${esc(s.title ? `${s.title} · ` : '')}${esc(s.email)}</div></div></div></td>
       <td>${s.role === 'owner' ? `<span class="pill vio">${ic('crown', 11)} OWNER</span>` : s.role === 'manager' ? '<span class="pill info">MANAGER</span>' : '<span class="pill dim">EMPLOYEE</span>'}</td>
       <td>${!s.active ? '<span class="pill bad">OFF</span>' : !s.signed_in ? '<span class="pill warn">INVITED</span>' : s.on_clock ? `<span class="pill ok">${s.on_clock.on_break ? 'BREAK' : 'ON'} · #${esc(s.on_clock.store_code)}</span>` : `<span class="muted" style="font-size:12.5px">${s.last_seen ? 'seen ' + fmtWhen(s.last_seen) : '—'}</span>`}</td>
       <td class="muted">${s.default_store ? '#' + esc(s.default_store) : '—'}</td><td class="num">${hm(s.week_minutes || 0)}</td><td class="num">${money(Number(s.month_sales) || 0)}</td><td class="num">${pts[s.user_id] ? `<b class="${pts[s.user_id].total < 0 ? 'neg' : ''}">${pts[s.user_id].total}</b>` : '<span class="muted">—</span>'}</td>${can('owner') ? `<td class="num">${s.pay_rate != null ? money(Number(s.pay_rate)) + '/h' : '—'}</td>` : ''}
@@ -1567,6 +1709,7 @@
     shell(); go(location.hash.slice(1) || 'today');
   }
   document.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k' && S.me) { e.preventDefault(); if (!document.querySelector('.cmdk')) openSearch(); return; }
     if (!(e.metaKey || e.ctrlKey) || !S.me || document.querySelector('.scrim') || e.altKey || e.shiftKey) return;
     const list = visible(), n = +e.key;
     if (n >= 1 && n <= Math.min(9, list.length)) { e.preventDefault(); go(list[n - 1].id); }

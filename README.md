@@ -32,7 +32,7 @@ The repo is public, so nothing secret lives here: the pages only hold public key
 
 ## Setup / updating
 
-1. **Database**: Supabase → aARgon3 & Mexel Backend → SQL Editor → run `supabase/aargon3-2.0.sql` (once), then `supabase/aargon3-2.1.sql`, then `supabase/aargon3-2.3.sql` (points and website custom-order requests), then `supabase/aargon3-2.4.sql` (portal, gifts, referrals, plan changes, pausing, tax, reminders, store hours), then `supabase/aargon3-2.5.sql` (deals, codes that switch themselves off, old-code upgrade, code batches), then `supabase/aargon3-2.5.1.sql` (editing codes and deals, version check). The terminal tells the owner when the database is behind.
+1. **Database**: Supabase → aARgon3 & Mexel Backend → SQL Editor → run `supabase/aargon3-2.0.sql` (once), then `supabase/aargon3-2.1.sql`, then `supabase/aargon3-2.3.sql` (points and website custom-order requests), then `supabase/aargon3-2.4.sql` (portal, gifts, referrals, plan changes, pausing, tax, reminders, store hours), then `supabase/aargon3-2.5.sql` (deals, codes that switch themselves off, old-code upgrade, code batches), then `supabase/aargon3-2.5.1.sql` (editing codes and deals, version check), then `supabase/aargon3-2.6.sql` (Nexus accounts on orders, one search). **Also in the NEXUS project**: run `supabase/nexus-side/aargon3-2.6-in-nexus.sql` (aARgon3 in your Apoji account, aARgon3 parts on the status page). The terminal tells the owner when the database is behind.
 2. **Functions**: from this folder, `npx -y supabase@latest login` once, then `npx -y supabase@latest functions deploy checkout stripe-webhook staff --project-ref yuergfrpfhtcxjkcgjrx --no-verify-jwt --use-api`. Always keep `--no-verify-jwt` (the functions check sign-ins themselves). The terminal warns managers when the functions are older than the app.
 3. **Secrets** (Supabase → Edge Functions → Secrets): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SITE_URL` = `https://apojidelegraphics.github.io/aArgon3`. Optional: `EMAILJS_PRIVATE_KEY` (only if your EmailJS account requires the private key).
 4. **Stripe webhook** → `https://yuergfrpfhtcxjkcgjrx.supabase.co/functions/v1/stripe-webhook`, Snapshot payloads, events:
@@ -43,6 +43,12 @@ The repo is public, so nothing secret lives here: the pages only hold public key
 8. **Card updates** in Your order: Stripe → Settings → Billing → Customer portal → Save (turns on Stripe's card-update page).
 
 Test with card `4242 4242 4242 4242`, any future date, any CVC. In the sandbox Stripe only emails invoices to your own team's addresses.
+
+## Apoji-wide (2.6)
+
+- **One account**: staff sign in with their Nexus account, so the terminal shows Nexus pictures, frames and names (Nexus `apoji_profiles`), your Apoji apps (`apoji_account`), and pings `presence_ping('aargon3')`. Customers link Nexus to an order in Your order with a one-time code from Nexus → Settings → Profile → Link code. `assets/cosmetics.js` + `assets/fonts` are copied from Nexus-28 (`npm run sync:apoji`).
+- **Status**: incidents on the `aargon3_store` / `aargon3_terminal` parts of the [status page](https://apojidelegraphics.github.io/Nexus-28/status/) show as a banner in the store and terminal, with linked known issues, workarounds and the fixing release (Apoji Admin → Status links them). Known issues tagged `aargon3` show on the terminal's Today page.
+- **Search**: ⌘K / Ctrl+K in the terminal searches pages, orders (also by Nexus username), and for managers custom orders, codes, deals and the team, plus Apoji (known issues, incidents, people, agents) through Nexus `apoji_search`. Apoji Admin can call the same `search` action.
 
 ## Develop
 

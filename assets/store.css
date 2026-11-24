@@ -185,3 +185,13 @@ table.mini { width: 100%; border-collapse: collapse; font-size: 14px; } table.mi
 .sheet .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; } .sheet label { display: grid; gap: 5px; font-size: 13.5px; margin-top: 10px; }
 @media (max-width: 760px) { .tl li { grid-template-columns: 1fr; gap: 2px; } .sheet .grid2 { grid-template-columns: 1fr; } }
 .codeform .field::placeholder { text-transform: none; font-family: var(--sans); }
+
+/* ================================================================ 2.6 Apoji */
+.apoji-status { display: grid; gap: 6px; margin: 0 auto; padding: 10px max(20px, calc((100vw - 1180px) / 2)); background: rgba(255,184,77,.08); border-bottom: 1px solid rgba(255,184,77,.35); font-size: 14px; }
+.apoji-status .as-row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; } .apoji-status .as-row.critical, .apoji-status .as-row.major { color: #ffd0d0; }
+.apoji-status .as-row.maintenance { color: var(--accent); } .apoji-status .as-tip { color: var(--muted); } .apoji-status a { color: var(--accent); }
+.ap-look { display: inline-flex; align-items: center; gap: 12px; } .ap-look b { display: block; font-size: 16px; } .ap-look small { color: var(--muted); font-family: var(--mono); font-size: 12.5px; }
+.ap-av { display: inline-grid; place-items: center; border-radius: 50%; overflow: hidden; background: rgba(var(--rgb), .15); font-weight: 700; } .ap-av img { width: 100%; height: 100%; object-fit: cover; }
+.ap-linked { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.apoji-link .codeform .field { text-transform: uppercase; } .apoji-link .err:not(:empty) { margin-top: 6px; color: #ff9b9b; font-size: 13px; }
+.acct-pfp { align-self: center; margin-right: 6px; }

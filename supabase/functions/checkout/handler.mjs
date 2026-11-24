@@ -14,7 +14,7 @@
 // 2.5 — deals on the store page and at checkout; the portal also shows the next bill and credit, takes a code, edits contact details,
 // and emails a receipt:  { action: 'portal_code' | 'portal_contact' | 'portal_receipt', order, email, … }
 // Needs secrets STRIPE_SECRET_KEY and SITE_URL (https://apojidelegraphics.github.io/aArgon3).
-import { A3, cors, json, Oops, db, stripe, startCheckout, sessionStatus, checkPromo, storeInfo, newQuoteNo, taxFor, cleanGift, giftPrice, mailer,
+import { A3, cors, json, Oops, db, stripe, linkApoji, startCheckout, sessionStatus, checkPromo, storeInfo, newQuoteNo, taxFor, cleanGift, giftPrice, mailer,
   subInfo, invoicesFor, planChange, pauseSub, resumeSub, cancelAtEnd, billingPortal, publicOrder, storeStatus, GIFT_MONTHS,
   liveDeals, applyDeals, publicDeal, nextBill, codeOnPlan, receiptParams } from '../_shared/lib.mjs';
 
@@ -36,7 +36,7 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
     const sub = o.subscription ? await subInfo(call, o.subscription).catch(() => null) : null;
     const [invoices, s, next] = await Promise.all([invoicesFor(call, o), rpc('a3_settings').catch(() => ({})), o.status === 'ACTIVE' ? nextBill(call, o).catch(() => null) : null]);
     const order = publicOrder({ ...o, stripe_customer: !!o.customer }, sub);
-    order.history = (o.history || []).map(h => ({ kind: h.kind, at: h.at, from: h.from, to: h.to, months: h.months, code: h.code, due_now: h.due_now, credit: h.credit }));
+    order.history = (o.history || []).map(h => ({ kind: h.kind, at: h.at, from: h.from, to: h.to, months: h.months, code: h.code, due_now: h.due_now, credit: h.credit, username: h.username }));
     order.deals = o.deals || [];
     order.contact = { first: o.customer_info?.first || (o.customer_name || '').split(' ')[0] || '', last: o.customer_info?.last || (o.customer_name || '').split(' ').slice(1).join(' '),
       phone: o.customer_phone || '', company: o.company_name || '', title: o.customer_info?.title || '', billing_email: o.customer_info?.billing_email || '' };
@@ -151,6 +151,16 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
         await mailer(env, fetchImpl, s).receipt(receiptParams(o, { store: s?.business?.name || 'aARgon3', to: o.customer_email }));
         return json({ sent: true, to: o.customer_email }, 200, h);
       }
+      // 2.6: your Nexus account on this order (picture, frame and name show here and to staff)
+      if (b.action === 'portal_link') {
+        const o = await portalOrder(b, req);
+        const ip = (req.headers.get('x-forwarded-for') || '').split(',')[0].trim() || 'unknown';
+        if (await rpc('a3_portal_attempt', { p_keys: [`link:${ip}`], p_failed: false }) >= 10) throw new Oops('Too many tries. Wait an hour and try again.', 429);
+        try { await linkApoji({ env, fetchImpl, rpc, o, code: b.code }); }
+        catch (e) { if (e.status === 404) await rpc('a3_portal_attempt', { p_keys: [`link:${ip}`], p_failed: true }); throw e; }
+        return json(await portalView(await portalOrder(b, req)), 200, h);
+      }
+      if (b.action === 'portal_unlink') { const o = await portalOrder(b, req); await rpc('a3_order_apoji', { p_order: o.order_id, p: null }); return json(await portalView(await portalOrder(b, req)), 200, h); }
       if (b.action === 'portal_card') { const o = await portalOrder(b, req); return json({ url: await billingPortal({ call, customer: o.customer, returnUrl: `${site}/account.html` }) }, 200, h); }
       // ---------- gifts
       if (b.action === 'gift_check' || b.action === 'gift_claim') {

@@ -15,6 +15,8 @@
 <script src="assets/config.js"></script>
 <script src="assets/catalog.js"></script>
 <script src="assets/forms.js"></script>
+<script src="assets/cosmetics.js"></script>
+<script src="assets/apoji.js"></script>
 </head>
 <body>
 <div class="bgglow"></div>
@@ -112,7 +114,7 @@
     $('find').closest('section').hidden = true;
     $('view').hidden = false;
     $('view').innerHTML = `
-      <div class="acct-top"><div><div class="kicker">Order <span class="mono">${esc(o.order_id)}</span> <button class="cpb" id="cpo" title="Copy the order number">Copy</button></div>
+      <div class="acct-top">${o.apoji?.avatar_url ? `<span class="acct-pfp">${Apoji.avatar(o.apoji, 64)}</span>` : ''}<div><div class="kicker">Order <span class="mono">${esc(o.order_id)}</span> <button class="cpb" id="cpo" title="Copy the order number">Copy</button></div>
         <h1>${esc(o.plan)} ${esc(tierName(o.tier))}</h1><p class="muted" style="margin:0">${esc(o.company_name || o.customer_name || '')}${o.customer_email ? ` · ${esc(o.customer_email)}` : ''}</p></div>
         <span class="sp"></span><span class="pill ${cls}">${esc(word)}</span><button class="btn small quiet" id="out">Not you? Look up another</button></div>
       <div class="acct-grid">
@@ -150,6 +152,12 @@
           ${o.contact.billing_email ? `<span>Billing email</span><span>${esc(o.contact.billing_email)}</span>` : ''}
           <span>Phone</span><span>${esc(o.contact.phone || '—')}</span></div>
           <div class="acct-acts" style="margin-top:12px"><button class="btn small" id="edc">Edit details</button><button class="btn small quiet" id="rcpt">Email me a receipt</button></div></div>
+        <div class="card apoji-link"><h3>Your Apoji account</h3>
+          ${o.apoji ? `<div class="ap-linked">${Apoji.look(o.apoji, 52)}<button class="btn small quiet" id="unlink">Unlink</button></div>
+            <p class="fine" style="margin:10px 0 0">Linked ${day(o.apoji.linked_at)}. Staff see your Nexus picture and name when they help you.</p>`
+          : `<p class="muted" style="margin:0 0 10px;font-size:14px">Use Nexus '28? Link your account so your picture, frame and name show on this order.</p>
+            <form class="codeform" id="linkf"><input class="field mono" id="lcode" placeholder="8-letter link code" maxlength="10" autocomplete="off"><button class="btn small">Link</button></form><div class="err" id="ler"></div>
+            <p class="fine" style="margin:8px 0 0">In Nexus: Settings → Profile → <b>Link code</b>. Each code works once, for 15 minutes.</p>`}</div>
         ${o.referral_code && view.referral_enabled ? `<div class="card refcard"><h3>Give a month, get a month</h3>
           <p style="margin:4px 0 10px">Share your code <b class="mono">${esc(o.referral_code)}</b>. A friend who uses it gets a month off; you get a month of credit on your next bill.</p>
           <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn small" id="refcp">Copy my link</button>
@@ -172,6 +180,10 @@
     on('cancel', cancelSheet);
     on('cpo', async e => { try { await navigator.clipboard.writeText(o.order_id); e.target.textContent = 'Copied ✓'; setTimeout(() => e.target.textContent = 'Copy', 1500); } catch { prompt('Your order number:', o.order_id); } });
     on('edc', contactSheet);
+    on('unlink', e => busy(e.target, 'Unlinking…', async () => { try { view = await act('portal_unlink'); render(); toast('Unlinked.', 'ok'); } catch (err) { toast(err.message, 'bad'); } }));
+    const lf = $('linkf');
+    if (lf) lf.onsubmit = ev => { ev.preventDefault(); $('ler').textContent = ''; const code = $('lcode').value.trim(); if (!code) return;
+      busy(lf.querySelector('button'), 'Linking…', async () => { try { view = await act('portal_link', { code }); render(); toast(`Linked to @${view.order.apoji?.username || 'your Nexus account'}.`, 'ok'); } catch (err) { $('ler').textContent = err.message; } }); };
     on('rcpt', e => busy(e.target, 'Sending…', async () => { try { const r = await act('portal_receipt'); toast(`Sent to ${r.to}.`, 'ok'); } catch (err) { toast(err.message, 'bad'); } }));
     const cf = $('codef');
     if (cf) cf.onsubmit = ev => { ev.preventDefault(); $('cer').textContent = ''; const code = $('pcode').value.trim(); if (!code) return;
@@ -180,7 +192,7 @@
   function histText(h) {
     return { created: 'Order placed', change: `Changed plan${h.from ? ` from ${h.from}` : ''}${h.to ? ` to ${h.to}` : ''}`, pause: `Paused${h.months ? ` for ${h.months} month${h.months === 1 ? '' : 's'}` : ''}`, resume: 'Resumed',
       cancel_at_end: 'Set to cancel at the end of the period', keep: 'Kept the plan (cancel undone)', code: `Added code ${h.code || ''}`.trim(), contact: 'Updated contact details',
-      referral: 'Friend joined with your code', renew: 'Renewed', gift: 'Gift redeemed' }[h.kind] || (h.kind ? h.kind[0].toUpperCase() + h.kind.slice(1).replace(/_/g, ' ') : 'Update');
+      referral: 'Friend joined with your code', apoji_link: `Linked Nexus account${h.username ? ` @${h.username}` : ''}`, apoji_unlink: 'Unlinked Nexus account', renew: 'Renewed', gift: 'Gift redeemed' }[h.kind] || (h.kind ? h.kind[0].toUpperCase() + h.kind.slice(1).replace(/_/g, ' ') : 'Update');
   }
   function contactSheet() {
     const o = view.order, c = o.contact, biz = planKey(o.plan) !== 'personal', ent = planKey(o.plan) === 'enterprise';

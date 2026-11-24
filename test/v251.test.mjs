@@ -126,7 +126,7 @@ test('Stripe hiccups are retried with one idempotency key; a dead connection giv
 test('version check: me says which server and database it is; an unknown action says the server is older', async () => {
   const w = world(), h = staff(ENV, w.fetch);
   const me = (await call(h, { action: 'me' }, { authorization: `Bearer ${OWNER}` })).body;
-  assert.strictEqual(me.server, SERVER_VERSION); assert.strictEqual(me.db, '2.5.1');
+  assert.strictEqual(me.server, SERVER_VERSION); assert.strictEqual(me.db, '2.6.0');
   w.noVersion = true;
   assert.strictEqual((await call(h, { action: 'me' }, { authorization: `Bearer ${OWNER}` })).body.db, null);
   const r = await call(h, { action: 'promo_teleport' }, M);
@@ -139,6 +139,6 @@ test('versions agree: package.json, the terminal, the server functions and the n
   assert.strictEqual(term.match(/APP_VERSION = '([\d.]+)'/)[1], pkg);
   assert.strictEqual(SERVER_VERSION, pkg);
   const need = term.match(/NEED_DB = '([\d.]+)'/)[1];
-  const sql = fs.readFileSync(new URL(`../supabase/aargon3-${need}.sql`, import.meta.url), 'utf8');
+  const sql = fs.readFileSync(new URL(`../supabase/aargon3-${need.replace(/\.0$/, '')}.sql`, import.meta.url), 'utf8');   // 2.6.0 → aargon3-2.6.sql
   assert.match(sql, new RegExp(`a3_version\\(\\) returns text language sql immutable as \\$\\$ select '${need.replace(/\./g, '\\.')}'`));
 });

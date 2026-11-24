@@ -8,7 +8,7 @@ const path = require('path');
 
 const flags = (process.env.A3_PG || '').split(/\s+/).filter(Boolean);
 const f = p => path.join(__dirname, '..', p);
-test('aargon3-2.0 → 2.5.1.sql', { skip: flags.length ? false : 'set A3_PG to run' }, () => {
+test('aargon3-2.0 → 2.6.sql', { skip: flags.length ? false : 'set A3_PG to run' }, () => {
   const psql = (...a) => execFileSync('psql', [...flags, '-v', 'ON_ERROR_STOP=1', '-q', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   const db = 'a3_test_' + process.pid;
   psql('-d', 'postgres', '-c', `drop database if exists ${db}`, '-c', `create database ${db}`);
@@ -38,5 +38,9 @@ test('aargon3-2.0 → 2.5.1.sql', { skip: flags.length ? false : 'set A3_PG to r
     psql('-d', db, '-f', f('supabase/aargon3-2.5.1.sql'));   // safe to run again
     const out6 = psql('-d', db, '-f', f('test/sql/checks-2.5.1.sql'));
     if (!out6.includes('ALL 2.5.1 CHECKS PASSED')) throw new Error(out6);
+    psql('-d', db, '-f', f('supabase/aargon3-2.6.sql'));
+    psql('-d', db, '-f', f('supabase/aargon3-2.6.sql'));   // safe to run again
+    const out7 = psql('-d', db, '-f', f('test/sql/checks-2.6.sql'));
+    if (!out7.includes('ALL 2.6 CHECKS PASSED')) throw new Error(out7);
   } finally { psql('-d', 'postgres', '-c', `drop database if exists ${db}`); }
 });

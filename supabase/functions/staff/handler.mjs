@@ -11,12 +11,10 @@
 //
 // Body: { action, ... } — see `actions` below. The 2.0 actions (me, clock_in, clock_out, break, shifts, edit_shift, sale,
 // sale_status, comp, orders, order, cancel, log) keep working the same way for Apoji Admin.
-import { A3, cors, json, Oops, db, stripe, SERVER_VERSION, editPromo, editDeal, startCheckout, sessionStatus, newOrderId, newQuoteNo, sendInvoice, checkPromo, discountLabel, storeInfo,
+import { A3, cors, json, Oops, db, stripe, SERVER_VERSION, NEXUS_URL, NEXUS_KEY, editPromo, editDeal, startCheckout, sessionStatus, newOrderId, newQuoteNo, sendInvoice, checkPromo, discountLabel, storeInfo,
   taxFor, saveTax, mailer, receiptParams, subInfo, planChange, pauseSub, resumeSub, cancelAtEnd, billingPortal, publicOrder, storeStatus, cleanHours, EMAILJS_DEFAULTS,
   liveDeals, applyDeals, publicDeal, saveDeal, codesFor, upgradeOldCode, makeCodes } from '../_shared/lib.mjs';
 
-const NEXUS_URL = 'https://yzbnxpkuhlxsuwzbjifx.supabase.co';
-const NEXUS_KEY = 'sb_publishable_LY-EZORCvEQqW6AeQC5a8w_Z7wmeyjn';   // public key, safe to ship
 const OWNER_EMAILS = ['apojidelegraphics101010@gmail.com'];
 const TZ = 'America/New_York';
 const RANK = { employee: 1, manager: 2, owner: 3 };
@@ -557,7 +555,13 @@ export function handler(env, fetchImpl = fetch, now = () => Date.now()) {
       const r = await rpc('a3_store_save', { p_code: String(b.code || ''), p_name: String(b.name || '').slice(0, 80), p_region: String(b.region || 'A').slice(0, 1), p_active: b.active !== false });
       await log(who, 'store', { code: r.code, name: r.name, active: r.active }); return r;
     },
-    async log(who) { need(who, 'manager'); return rpc('a3_log_list', { p_limit: 300 }); }
+    async log(who) { need(who, 'manager'); return rpc('a3_log_list', { p_limit: 300 }); },
+    // 2.6: one search box (the terminal's ⌘K, Apoji Admin). Everyone finds orders; managers also custom orders, codes, deals, team.
+    async search(who, b) {
+      const q = String(b.q || '').trim().slice(0, 80);
+      if (q.length < 2) return [];
+      return rpc('a3_search', { p_q: q, p_manager: who.manager, p_limit: Math.max(1, Math.min(25, Number(b.limit) || 8)) }).catch(e => { if (/a3_search|function/.test(e.message)) return []; throw e; });   // [] before aargon3-2.6.sql
+    }
   };
 
   return async function (req) {

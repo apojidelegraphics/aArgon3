@@ -44,7 +44,7 @@ export function world({ legacy = false } = {}) {
     paid_total: (o.amount_cents || 0) / 100, payments: 1,
     region: o.region || null, tax: (o.tax_cents || 0) / 100, current_period_end: o.current_period_end || null, cancel_at: o.cancel_at || null, paused_until: o.paused_until || null,
     expires_at: o.expires_at || null, referral_code: o.referral_code || null, referred_by: o.referred_by || null, gift: o.gift || null, history: o.history || [],
-    stripe_customer: !!o.stripe_customer_id, deals: o.deals || null, company_name: o.company_name || '', customer_phone: o.customer_phone || '', customer_info: o.customer_info || null, referrals: w.referrals.filter(r => r.referrer_order === o.order_id).length,
+    stripe_customer: !!o.stripe_customer_id, deals: o.deals || null, apoji: o.apoji || null, company_name: o.company_name || '', customer_phone: o.customer_phone || '', customer_info: o.customer_info || null, referrals: w.referrals.filter(r => r.referrer_order === o.order_id).length,
     referral_credit: w.referrals.filter(r => r.referrer_order === o.order_id).reduce((m, r) => m + r.credit_cents, 0) / 100 });
   // a subscription the way Stripe returns it (2024-06-20)
   w.sub = id => { const x = w.subs[id] || (w.subs[id] = { id, status: 'active', customer: 'cus_1', current_period_end: Math.floor(Date.now() / 1000) + 20 * 864e2, cancel_at_period_end: false, pause_collection: null,
@@ -136,6 +136,14 @@ export function world({ legacy = false } = {}) {
       return w.emailFail ? new Response(w.emailFail, { status: 400 }) : new Response('OK', { status: 200 });
     }
     if (u.host === 'nexus.test') {
+      if (u.pathname === '/rest/v1/rpc/apoji_public_profile') {   // anon: the publishable key
+        assert.strictEqual(init.headers.apikey, 'pub');
+        const a = JSON.parse(init.body || '{}'); w.nexusCalls = (w.nexusCalls || []).concat([a]);
+        if (w.noNexusLink) return res({ code: 'PGRST202', message: 'Could not find the function public.apoji_public_profile in the schema cache' }, 404);
+        const p = (w.linkCodes || {})[a.p_code];
+        if (!p) return res({ ok: false, error: 'not_found' });
+        delete w.linkCodes[a.p_code]; return res({ ok: true, profile: p });
+      }
       const who = w.users[(init.headers.Authorization || '').replace('Bearer ', '')];
       if (!who) return res({ msg: 'bad jwt' }, 401);
       if (u.pathname === '/auth/v1/user') return res({ id: who.id, email: who.email });
@@ -256,7 +264,15 @@ export function world({ legacy = false } = {}) {
           const x = { id: w.promos.length + 1, code: p.code, type: p.type, value: p.value, duration: p.duration, duration_months: p.duration_months, plans: p.plans, tiers: p.tiers, min_total: p.min_total,
             limit: p.limit, used: 0, active: true, live: true, stripe_promo_id: p.stripe_promo_id, description: p.description, created_by: p.created_by, batch: p.batch || null, ends: p.ends || null, old: false };
           if (w.promos.some(y => y.code === x.code)) return oops('That code already exists.'); w.promos.push(x); return res(x); }
-        case 'a3_version': return w.noVersion ? oops('Could not find the function public.a3_version') : res('2.5.1');
+        case 'a3_order_apoji': { const o = w.orders[a.p_order]; if (!o) return oops('No order with that number.');
+          (o.history = o.history || []).push({ kind: a.p ? 'apoji_link' : 'apoji_unlink', at: now(), by: 'customer', username: a.p ? a.p.username : o.apoji?.username });
+          o.apoji = a.p ? { ...a.p, linked_at: now() } : null; return res(orderJson(o)); }
+        case 'a3_search': { const q = a.p_q.toLowerCase(); w.searches = (w.searches || []).concat([a]);
+          const out = Object.values(w.orders).filter(o => [o.order_id, o.customer_name, o.customer_email, o.company_name, o.apoji?.username].some(v => String(v || '').toLowerCase().includes(q)))
+            .map(o => ({ kind: 'order', id: o.order_id, title: o.company_name || o.customer_name, apoji: o.apoji?.username || null }));
+          if (a.p_manager) out.push(...w.promos.filter(x => x.code.toLowerCase().includes(q)).map(x => ({ kind: 'promo', id: x.id, title: x.code })));
+          return res(out); }
+        case 'a3_version': return w.noVersion ? oops('Could not find the function public.a3_version') : res('2.6.0');
         case 'a3_promo_edit': { const x = w.promos.find(y => y.id === a.p_id); if (!x) return oops('No promotion with that id.'); const p = a.p;
           if (p.code && w.promos.some(y => y.code === p.code && y.id !== x.id)) return oops('That code already exists.');
           for (const [k, v] of Object.entries(p)) if (!['active', 'by', 'stripe_coupon_id'].includes(k)) x[k] = v;

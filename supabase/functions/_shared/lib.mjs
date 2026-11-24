@@ -36,8 +36,11 @@ export function db(env, fetchImpl = fetch) {
 
 // ---------- Stripe (REST, pinned API version so field names never change under us)
 export const STRIPE_VERSION = '2024-06-20';
-export const SERVER_VERSION = '2.5.1';   // the terminal compares this with its own version
+export const SERVER_VERSION = '2.6.0';   // the terminal compares this with its own version
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Nexus (the Apoji account): public URL + publishable key, safe to ship
+export const NEXUS_URL = 'https://yzbnxpkuhlxsuwzbjifx.supabase.co';
+export const NEXUS_KEY = 'sb_publishable_LY-EZORCvEQqW6AeQC5a8w_Z7wmeyjn';
 export const UNSET = '\u0000unset';   // sends "field=" so Stripe clears it (e.g. pause_collection)
 function form(obj, prefix = '', out = new URLSearchParams()) {
   for (const [k, v] of Object.entries(obj)) {
@@ -587,7 +590,7 @@ export async function billingPortal({ call, customer, returnUrl }) {
 // what a customer may see about their own order (no staff fields)
 export function publicOrder(o, sub = null) {
   const pick = ['order_id', 'status', 'plan', 'tier', 'billing', 'amount', 'tax', 'seats', 'models', 'config', 'created_at', 'current_period_end', 'cancel_at', 'paused_until',
-    'expires_at', 'referral_code', 'referrals', 'referral_credit', 'region', 'customer_name', 'customer_email', 'company_name', 'quote_no', 'subscription', 'stripe_customer'];
+    'expires_at', 'referral_code', 'referrals', 'referral_credit', 'region', 'customer_name', 'customer_email', 'company_name', 'quote_no', 'subscription', 'stripe_customer', 'apoji'];
   const out = Object.fromEntries(pick.map(k => [k, o[k] ?? null]));
   if (o.gift) out.gift = { from_name: o.gift.from_name, message: o.gift.message, months: o.gift.months, claimed_at: o.gift.claimed_at };
   if (sub) Object.assign(out, { current_period_end: sub.current_period_end || out.current_period_end, cancel_at: sub.cancel_at_period_end ? (sub.cancel_at || sub.current_period_end) : null,
@@ -851,4 +854,34 @@ export async function codeOnPlan({ call, rpc, o, code, by = 'customer' }) {
   await call('POST', `subscriptions/${o.subscription}`, { promotion_code: x.stripe_promo_id });
   await rpc('a3_order_patch', { p_order: o.order_id, p: { event: { kind: 'code', code: x.code, label: x.label, by } } });
   return { code: x.code, label: x.label };
+}
+
+// ================================================================ 2.6 Apoji-wide
+// ---------- link a Nexus account to an order: the customer makes a one-time code in Nexus (Settings → Profile → Link code),
+// we trade it with Nexus for the public look of that account (picture, frame, name style; never an email or id) and keep a copy.
+const APOJI_KEYS = ['username', 'nickname', 'display_name', 'avatar_url', 'frame', 'font', 'color', 'ptheme', 'name_a', 'name_b', 'pframe', 'pronouns', 'owner'];
+export function apojiLook(p = {}) {
+  const out = {};
+  for (const k of APOJI_KEYS) if (p[k] != null && p[k] !== '') out[k] = typeof p[k] === 'string' ? p[k].slice(0, 300) : p[k];
+  if (out.avatar_url && !/^https:\/\/[a-z0-9.-]+\.supabase\.co\/storage\/v1\/object\/public\//i.test(out.avatar_url)) delete out.avatar_url;   // only Nexus's own picture storage
+  if (out.owner != null) out.owner = out.owner === true;
+  return out;
+}
+export async function nexusRpc(env, fetchImpl, fn, args = {}, token = null) {
+  const url = (env.NEXUS_URL || NEXUS_URL).replace(/\/$/, ''), key = env.NEXUS_KEY || NEXUS_KEY;
+  let res;
+  try { res = await fetchImpl(`${url}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { apikey: key, Authorization: `Bearer ${token || key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(args) }); }
+  catch { throw new Oops("Can't reach Nexus right now. Try again in a minute.", 503); }
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Oops(/function|schema cache/i.test(data?.message || '') ? 'Linking Nexus accounts isn\'t switched on yet.' : (data?.message || `Nexus error (${res.status}).`), 502);
+  return data;
+}
+export async function linkApoji({ env, fetchImpl, rpc, o, code }) {
+  const c = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (c.length !== 8) throw new Oops('Link codes are 8 letters and numbers. Make one in Nexus: Settings → Profile → Link code.');
+  const r = await nexusRpc(env, fetchImpl, 'apoji_public_profile', { p_code: c, p_app: 'aARgon3' });
+  if (!r?.ok || !r.profile) throw new Oops("That code didn't work. Each code works once, for 15 minutes: make a new one in Nexus (Settings → Profile → Link code).", 404);
+  const look = apojiLook(r.profile);
+  if (!look.username) throw new Oops('That Nexus account needs a username first (Nexus → Settings → Profile).');
+  return rpc('a3_order_apoji', { p_order: o.order_id, p: look });
 }
